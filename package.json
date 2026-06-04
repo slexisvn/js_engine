@@ -1,0 +1,13 @@
+{
+  "name": "minijit",
+  "version": "1.0.0",
+  "description": "A JavaScript engine",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/cli/index.js",
+    "test": "node --test tests/",
+    "bench": "node bench/run.js"
+  },
+  "license": "MIT"
+}

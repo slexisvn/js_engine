@@ -1,0 +1,1658 @@
+import * as bytecode from "../ops/bytecode.js";
+
+import {
+  mkSmi,
+  mkDouble,
+  mkBool,
+  mkString,
+  mkObject,
+  mkFunction,
+  mkArray,
+  mkUndefined,
+  mkNull,
+  mkNumber,
+  mkGenerator,
+  mkRegex,
+  isSmi,
+  isDouble,
+  isNumber,
+  isString,
+  isObject,
+  isFunction,
+  isArray,
+  isUndefined,
+  isNull,
+  isBool,
+  isPromise,
+  isIterator,
+  isSymbol,
+  toNumber,
+  toBool,
+  toDisplayString,
+  typeOf,
+  getPayload,
+  getTag,
+  JSFunction,
+  abstractLooseEqual,
+  isPrimitive,
+  initWellKnownSymbols,
+  wellKnownSymbols,
+} from "../../../core/value/index.js";
+
+import {
+  createJSObject,
+  createJSArray,
+  createJSPrimitiveWrapper,
+} from "../../../objects/heap/factory.js";
+import {
+  INSTANCE_TYPE_STRING_WRAPPER,
+  INSTANCE_TYPE_NUMBER_WRAPPER,
+  INSTANCE_TYPE_BOOLEAN_WRAPPER,
+} from "../../../objects/maps/hidden-class.js";
+import { InlineCacheManager } from "../../../feedback/ic/index.js";
+import {
+  FeedbackVector,
+  FEEDBACK_PROPERTY,
+  FEEDBACK_BINARY_OP,
+  FEEDBACK_UNARY_OP,
+  FEEDBACK_CALL,
+} from "../../../feedback/vector/index.js";
+import { tracer } from "../../../core/tracing/index.js";
+import { builtins } from "../../../runtime/builtins/index.js";
+import { Environment } from "../../../runtime/intrinsics/environment.js";
+import { GlobalCellMap } from "../../../runtime/intrinsics/global-cells.js";
+import { MicrotaskQueue } from "../../../runtime/microtasks/microtask.js";
+import {
+  mkPromiseCapability,
+  PROMISE_FULFILLED,
+  PROMISE_REJECTED,
+} from "../../../runtime/async/promise.js";
+import {
+  getIterator,
+  createIteratorResult,
+  iteratorDone,
+  iteratorValue,
+} from "../../../runtime/iteration/iterator.js";
+import {
+  GeneratorObject,
+  GeneratorSuspend,
+  GEN_COMPLETED,
+  GEN_EXECUTING,
+  GEN_SUSPENDED,
+} from "../../../runtime/iteration/generator.js";
+import { createBuiltinPrototypes } from "../../../runtime/intrinsics/prototypes.js";
+import { analyzeSimpleConstructor } from "../compiler/helpers.js";
+import { dependencyRegistry } from "../../../deopt/dependencies.js";
+import {
+  VMTypeError,
+  VMError,
+  vmErrorToTagged,
+} from "../../../core/errors/index.js";
+import {
+  runtimeOwnKeys,
+  runtimeGetProperty,
+  runtimeSetProperty,
+} from "../../../objects/exotic/proxy-ops.js";
+
+import { RegisterFrame, throwIfTDZ } from "./frame.js";
+import {
+  requiresInterpreterOnly,
+  getBinaryOperands,
+  RegisterMiniJITException,
+  AsyncSuspend,
+  runAsyncWithSuspension,
+} from "./helpers.js";
+import {
+  installPromiseBuiltin,
+  exceptionToValue,
+  promiseAll,
+  promiseRace,
+} from "./promise.js";
+import {
+  handleLdaProp,
+  handleStaProp,
+  handleLdaIndex,
+  handleStaIndex,
+  handleNew,
+  handleDefineAccessor,
+  handleInstanceof,
+  handleIn,
+  handleDeleteProp,
+} from "./handlers.js";
+
+export { MAX_DEOPT_COUNT } from "./helpers.js";
+export { RegisterFrame } from "./frame.js";
+
+function boxPrimitive(value, interpreter) {
+  if (isString(value)) {
+    const wrapper = createJSPrimitiveWrapper(INSTANCE_TYPE_STRING_WRAPPER, value);
+    if (interpreter.builtinPrototypes.stringPrototype)
+      wrapper.setPrototype(interpreter.builtinPrototypes.stringPrototype);
+    return mkObject(wrapper);
+  }
+  if (isSmi(value) || isDouble(value)) {
+    const wrapper = createJSPrimitiveWrapper(INSTANCE_TYPE_NUMBER_WRAPPER, value);
+    if (interpreter.builtinPrototypes.numberPrototype)
+      wrapper.setPrototype(interpreter.builtinPrototypes.numberPrototype);
+    return mkObject(wrapper);
+  }
+  if (isBool(value)) {
+    const wrapper = createJSPrimitiveWrapper(INSTANCE_TYPE_BOOLEAN_WRAPPER, value);
+    if (interpreter.builtinPrototypes.booleanPrototype)
+      wrapper.setPrototype(interpreter.builtinPrototypes.booleanPrototype);
+    return mkObject(wrapper);
+  }
+  return value;
+}
+
+function callFunction(callee, args, thisValue, slot, interpreter, frame) {
+  if (!isFunction(callee)) {
+    throw new VMTypeError(`${toDisplayString(callee)} is not a function`);
+  }
+  const fn = getPayload(callee);
+  if (fn.compiled && !fn.compiled.isStrict && isPrimitive(thisValue) && !isNull(thisValue) && !isUndefined(thisValue)) {
+    thisValue = boxPrimitive(thisValue, interpreter);
+  }
+  if (slot) {
+    const receiverMapId =
+      thisValue && isObject(thisValue)
+        ? getPayload(thisValue).hiddenClass.id
+        : null;
+    const receiverMapVersion =
+      thisValue && isObject(thisValue)
+        ? getPayload(thisValue).hiddenClass.version
+        : null;
+    slot.recordCallTarget(
+      fn.name || "<anonymous>",
+      fn.compiled || null,
+      args.length,
+      receiverMapId,
+      receiverMapVersion,
+    );
+  }
+  if (fn.compiled && fn.compiled.isGenerator) {
+    const genFrame = new RegisterFrame(
+      fn.compiled,
+      args,
+      thisValue,
+      fn.closure,
+    );
+    interpreter.initFeedbackVector(fn.compiled);
+    const gen = new GeneratorObject(genFrame);
+    const result = mkGenerator(gen);
+    if (slot && result) slot.recordReturnType(getTag(result));
+    return result;
+  }
+  if (fn.compiled && fn.compiled.isAsync) {
+    const { capability, value } = mkPromiseCapability(
+      interpreter.microtaskQueue,
+    );
+    const asyncFrame = new RegisterFrame(
+      fn.compiled,
+      args,
+      thisValue,
+      fn.closure,
+    );
+    interpreter.initFeedbackVector(fn.compiled);
+    runAsyncWithSuspension(interpreter, asyncFrame, capability);
+    if (slot && value) slot.recordReturnType(getTag(value));
+    return value;
+  }
+
+  let callResult;
+  if (fn.call) {
+    callResult = fn.call(args, thisValue, interpreter);
+  } else if (fn.compiled) {
+    const compiled = fn.compiled;
+    compiled.invocationCount = (compiled.invocationCount || 0) + 1;
+
+    if (
+      compiled.isLazy &&
+      interpreter.jitEngine &&
+      typeof interpreter.jitEngine.compileLazy === "function"
+    ) {
+      interpreter.jitEngine.compileLazy(compiled);
+    }
+
+    if (interpreter.jitEngine && interpreter.tieringPolicy && !fn.closure) {
+      if (compiled.optimizedCode) {
+        callResult = compiled.optimizedCode(args, thisValue, interpreter);
+        if (slot && callResult) slot.recordReturnType(getTag(callResult));
+        return callResult;
+      }
+
+      if (typeof interpreter.tieringPolicy.recordExecution === "function") {
+        interpreter.tieringPolicy.recordExecution(compiled, 0);
+      }
+
+      const adaptivePolicy = typeof interpreter.tieringPolicy.shouldOptimize === "function";
+      const shouldJIT = adaptivePolicy
+        ? interpreter.tieringPolicy.shouldOptimize(compiled)
+        : compiled.invocationCount >= interpreter.tieringPolicy.jitThreshold &&
+          !compiled.optimizedCode &&
+          !compiled.disableOptimization;
+
+      if (shouldJIT && !requiresInterpreterOnly(compiled) && typeof interpreter.jitEngine.optimizeFunction === "function") {
+        if (adaptivePolicy) interpreter.tieringPolicy.notifyCompilationStart();
+        interpreter.jitEngine.optimizeFunction(compiled);
+        if (adaptivePolicy) interpreter.tieringPolicy.notifyCompilationEnd();
+        if (compiled.optimizedCode) {
+          callResult = compiled.optimizedCode(args, thisValue, interpreter);
+          if (slot && callResult) slot.recordReturnType(getTag(callResult));
+          return callResult;
+        }
+      }
+
+      if (compiled.baselineCode) {
+        callResult = compiled.baselineCode(args, thisValue, interpreter);
+        if (slot && callResult) slot.recordReturnType(getTag(callResult));
+        return callResult;
+      }
+      if (
+        compiled.invocationCount >=
+          interpreter.tieringPolicy.baselineThreshold &&
+        !compiled.baselineCode &&
+        !compiled.optimizedCode &&
+        !requiresInterpreterOnly(compiled) &&
+        typeof interpreter.jitEngine.baselineCompile === "function"
+      ) {
+        interpreter.jitEngine.baselineCompile(compiled);
+        if (compiled.baselineCode) {
+          callResult = compiled.baselineCode(args, thisValue, interpreter);
+          if (slot && callResult) slot.recordReturnType(getTag(callResult));
+          return callResult;
+        }
+      }
+    }
+
+    if (fn.closure) {
+      const closureFrame = new RegisterFrame(
+        compiled,
+        args,
+        thisValue,
+        fn.closure,
+      );
+      if (compiled.selfBindingSlot !== undefined) {
+        closureFrame.setReg(compiled.selfBindingSlot, callee);
+      }
+      interpreter.initFeedbackVector(compiled);
+      callResult = interpreter.runFrame(closureFrame);
+    } else {
+      const frame = new RegisterFrame(compiled, args, thisValue, null);
+      if (compiled.selfBindingSlot !== undefined) {
+        frame.setReg(compiled.selfBindingSlot, callee);
+      }
+      interpreter.initFeedbackVector(compiled);
+      callResult = interpreter.runFrame(frame);
+    }
+  } else {
+    throw new Error(`Cannot call function: ${fn.name || "unknown"}`);
+  }
+  if (slot && callResult) slot.recordReturnType(getTag(callResult));
+  return callResult;
+}
+
+export class RegisterInterpreter {
+  constructor(jitEngine) {
+    this.jitEngine = jitEngine;
+    this.globalCells = new GlobalCellMap();
+    this.callStack = [];
+    this.activeFrames = [];
+    this.icManager = new InlineCacheManager();
+    this.microtaskQueue =
+      jitEngine && jitEngine.microtaskQueue
+        ? jitEngine.microtaskQueue
+        : new MicrotaskQueue();
+
+    for (const [name, builtin] of Object.entries(builtins)) {
+      if (builtin.call || builtin.construct) {
+        const fn = { ...builtin, properties: {} };
+        for (const [k, v] of Object.entries(builtin)) {
+          if (k === "call" || k === "construct" || k === "name") continue;
+          if (v && typeof v === "object" && v.call) {
+            fn.properties[k] = mkFunction(v);
+          }
+        }
+        this.globalCells.write(name, mkFunction(fn));
+      } else if (typeof builtin === "object" && builtin !== null) {
+        const ns = { name, properties: {} };
+        for (const [methodName, method] of Object.entries(builtin)) {
+          if (methodName === "name") continue;
+          if (method && typeof method === "object" && method.call) {
+            ns.properties[methodName] = mkFunction(method);
+          } else if (typeof method === "number" && Number.isFinite(method)) {
+            ns.properties[methodName] = mkDouble(method);
+          }
+        }
+        this.globalCells.write(name, mkFunction(ns));
+      }
+    }
+    installPromiseBuiltin(this);
+    this._wireWellKnownSymbols();
+    this.builtinPrototypes = createBuiltinPrototypes();
+    this._wirePrototypes();
+  }
+
+  _wireWellKnownSymbols() {
+    initWellKnownSymbols();
+    const symCell = this.globalCells.read("Symbol");
+    if (symCell && isFunction(symCell)) {
+      const symFn = getPayload(symCell);
+      symFn.properties["iterator"] = wellKnownSymbols.iterator;
+      symFn.properties["hasInstance"] = wellKnownSymbols.hasInstance;
+      symFn.properties["toPrimitive"] = wellKnownSymbols.toPrimitive;
+      symFn.properties["toStringTag"] = wellKnownSymbols.toStringTag;
+    }
+  }
+
+  _wirePrototypes() {
+    const protoMap = {
+      String: this.builtinPrototypes.stringPrototype,
+      Array: this.builtinPrototypes.arrayPrototype,
+      Number: this.builtinPrototypes.numberPrototype,
+      Boolean: this.builtinPrototypes.booleanPrototype,
+      RegExp: this.builtinPrototypes.regexPrototype,
+      Map: this.builtinPrototypes.mapPrototype,
+      Set: this.builtinPrototypes.setPrototype,
+      WeakMap: this.builtinPrototypes.weakMapPrototype,
+    };
+    for (const [name, proto] of Object.entries(protoMap)) {
+      const cell = this.globalCells.read(name);
+      if (cell && isFunction(cell)) {
+        getPayload(cell).prototypeObj = proto;
+      }
+    }
+  }
+
+  _lookupBuiltinPrototype(proto, propName) {
+    const val = proto.getProperty(propName);
+    if (val !== undefined) return val;
+    const chain = proto.lookupPrototypeChain(propName);
+    return chain.found ? chain.value : mkUndefined();
+  }
+
+  exceptionToValue(e) {
+    return exceptionToValue(e);
+  }
+
+  promiseAll(iterable) {
+    return promiseAll(this, iterable);
+  }
+
+  promiseRace(iterable) {
+    return promiseRace(this, iterable);
+  }
+
+  get tieringPolicy() {
+    return this.jitEngine ? this.jitEngine.tieringPolicy : null;
+  }
+
+  wrapConstant(val) {
+    if (val instanceof bytecode.RegisterCompiledFunction)
+      return mkFunction(new JSFunction(val, val.name));
+    if (typeof val === "number") return mkNumber(val);
+    if (typeof val === "string") return mkString(val);
+    if (typeof val === "boolean") return mkBool(val);
+    if (val === null) return mkNull();
+    if (val === undefined) return mkUndefined();
+    return mkUndefined();
+  }
+
+  initFeedbackVector(compiledFn) {
+    if (compiledFn.feedbackVector) return;
+
+    const fv = FeedbackVector.fromCompiledFunction(compiledFn);
+
+    for (const instr of compiledFn.instructions) {
+      const op = instr.opcode;
+      const operands = instr.operands;
+
+      switch (op) {
+        case bytecode.ROP_LDA_PROP:
+        case bytecode.ROP_STA_PROP:
+          if (operands.length >= 3 && operands[2] < fv.slots.length) {
+            fv.initSlot(operands[2], FEEDBACK_PROPERTY);
+          }
+          break;
+
+        case bytecode.ROP_LDA_INDEX:
+        case bytecode.ROP_STA_INDEX:
+          {
+            const fbIdx = operands[operands.length - 1];
+            if (fbIdx < fv.slots.length) {
+              fv.initSlot(fbIdx, FEEDBACK_PROPERTY);
+            }
+          }
+          break;
+
+        case bytecode.ROP_ADD:
+        case bytecode.ROP_SUB:
+        case bytecode.ROP_MUL:
+        case bytecode.ROP_DIV:
+        case bytecode.ROP_MOD:
+        case bytecode.ROP_EQ:
+        case bytecode.ROP_NEQ:
+        case bytecode.ROP_LT:
+        case bytecode.ROP_GT:
+        case bytecode.ROP_LTE:
+        case bytecode.ROP_GTE:
+        case bytecode.ROP_LOOSE_EQ:
+        case bytecode.ROP_LOOSE_NEQ:
+        case bytecode.ROP_BITAND:
+        case bytecode.ROP_BITOR:
+        case bytecode.ROP_BITXOR:
+        case bytecode.ROP_SHL:
+        case bytecode.ROP_SHR:
+        case bytecode.ROP_USHR:
+        case bytecode.ROP_POW:
+        case bytecode.ROP_INSTANCEOF:
+        case bytecode.ROP_IN:
+          if (operands.length >= 2 && operands[1] < fv.slots.length) {
+            fv.initSlot(operands[1], FEEDBACK_BINARY_OP);
+          }
+          break;
+
+        case bytecode.ROP_NOT:
+        case bytecode.ROP_NEG:
+        case bytecode.ROP_BITNOT:
+          if (operands.length >= 1 && operands[0] < fv.slots.length) {
+            fv.initSlot(operands[0], FEEDBACK_UNARY_OP);
+          }
+          break;
+
+        case bytecode.ROP_CALL:
+          if (operands.length >= 4 && operands[3] < fv.slots.length) {
+            fv.initSlot(operands[3], FEEDBACK_CALL);
+          }
+          break;
+
+        case bytecode.ROP_CALL_METHOD:
+          if (operands.length >= 4 && operands[3] < fv.slots.length) {
+            fv.initSlot(operands[3], FEEDBACK_CALL);
+          }
+          break;
+      }
+    }
+
+    compiledFn.feedbackVector = fv;
+  }
+
+  execute(compiledFn, args = [], thisValue = null) {
+    const executionStart = performance.now();
+    const finishExecution = (value) => {
+      if (
+        this.tieringPolicy &&
+        typeof this.tieringPolicy.recordExecution === "function"
+      ) {
+        this.tieringPolicy.recordExecution(
+          compiledFn,
+          performance.now() - executionStart,
+        );
+      }
+      return value;
+    };
+    compiledFn.lastExecutionTime = Date.now();
+    compiledFn.codeAge = 0;
+
+    if (
+      compiledFn.isLazy &&
+      this.jitEngine &&
+      typeof this.jitEngine.compileLazy === "function"
+    ) {
+      this.jitEngine.compileLazy(compiledFn);
+    }
+
+    this.consumePendingLazyDeopt(compiledFn, -1, "at function entry");
+
+    if (compiledFn.optimizedCode && !compiledFn.disableOptimization) {
+      return finishExecution(compiledFn.optimizedCode(args, thisValue, this));
+    }
+
+    compiledFn.invocationCount = (compiledFn.invocationCount || 0) + 1;
+
+    this.initFeedbackVector(compiledFn);
+
+    if (this.jitEngine && this.tieringPolicy) {
+      const loopBudgetTriggered =
+        compiledFn.feedbackVector &&
+        compiledFn.feedbackVector.loopBudgetExhausted;
+
+      const adaptivePolicy =
+        typeof this.tieringPolicy.shouldOptimize === "function";
+      const shouldJIT = adaptivePolicy
+        ? this.tieringPolicy.shouldOptimize(compiledFn)
+        : (compiledFn.invocationCount >= this.tieringPolicy.jitThreshold ||
+            loopBudgetTriggered) &&
+          !compiledFn.optimizedCode &&
+          !compiledFn.disableOptimization &&
+          Date.now() >= (compiledFn.optimizationCooldownUntil || 0);
+
+      if (
+        shouldJIT &&
+        !requiresInterpreterOnly(compiledFn) &&
+        typeof this.jitEngine.optimizeFunction === "function"
+      ) {
+        const reason = loopBudgetTriggered
+          ? `loop budget exhausted (invocations=${compiledFn.invocationCount})`
+          : `invocation count = ${compiledFn.invocationCount}`;
+        tracer.jitCompile(compiledFn.name, reason);
+        if (loopBudgetTriggered && compiledFn.feedbackVector) {
+          compiledFn.feedbackVector.resetLoopBudget();
+        }
+        if (adaptivePolicy) this.tieringPolicy.notifyCompilationStart();
+        this.jitEngine.optimizeFunction(compiledFn);
+        if (adaptivePolicy) this.tieringPolicy.notifyCompilationEnd();
+        if (compiledFn.optimizedCode) {
+          return finishExecution(
+            compiledFn.optimizedCode(args, thisValue, this),
+          );
+        }
+      }
+
+      if (compiledFn.baselineCode) {
+        return finishExecution(compiledFn.baselineCode(args, thisValue, this));
+      }
+
+      if (
+        compiledFn.invocationCount >= this.tieringPolicy.baselineThreshold &&
+        !requiresInterpreterOnly(compiledFn) &&
+        !compiledFn.baselineCode &&
+        !compiledFn.optimizedCode &&
+        typeof this.jitEngine.baselineCompile === "function"
+      ) {
+        this.jitEngine.baselineCompile(compiledFn);
+        if (compiledFn.baselineCode) {
+          return finishExecution(
+            compiledFn.baselineCode(args, thisValue, this),
+          );
+        }
+      }
+    }
+
+    if (compiledFn.isGenerator) {
+      const frame = new RegisterFrame(
+        compiledFn,
+        args,
+        thisValue || mkUndefined(),
+        null,
+      );
+      const gen = new GeneratorObject(frame);
+      return finishExecution(mkGenerator(gen));
+    }
+
+    if (compiledFn.isAsync) {
+      const { capability, value } = mkPromiseCapability(this.microtaskQueue);
+      const frame = new RegisterFrame(
+        compiledFn,
+        args,
+        thisValue || mkUndefined(),
+        null,
+      );
+      runAsyncWithSuspension(this, frame, capability);
+      return finishExecution(value);
+    }
+
+    const frame = new RegisterFrame(
+      compiledFn,
+      args,
+      thisValue || mkUndefined(),
+      null,
+    );
+    return finishExecution(this.runFrame(frame));
+  }
+
+  consumePendingLazyDeopt(compiledFn, bytecodeOffset, label) {
+    if (
+      !this.jitEngine ||
+      !this.jitEngine.deoptimizer ||
+      !this.jitEngine.deoptimizer.lazyMarker.hasPendingDeopt(compiledFn)
+    ) {
+      return false;
+    }
+    const deoptInfo =
+      this.jitEngine.deoptimizer.lazyMarker.consumeDeopt(compiledFn);
+    dependencyRegistry.unregister(compiledFn);
+    compiledFn.optimizedCode = null;
+    if (deoptInfo && deoptInfo.dependency) {
+      compiledFn.dependencyDeoptCount =
+        (compiledFn.dependencyDeoptCount || 0) + 1;
+    } else {
+      compiledFn.deoptCount = (compiledFn.deoptCount || 0) + 1;
+    }
+    tracer.jitDeopt(
+      compiledFn.name || "<anonymous>",
+      `Lazy deopt ${label}: ${deoptInfo.reason}`,
+      bytecodeOffset,
+    );
+    return true;
+  }
+
+  generatorNext(gen, sendValue) {
+    if (gen.state === GEN_COMPLETED) {
+      return createIteratorResult(mkUndefined(), true);
+    }
+    if (gen.state === GEN_EXECUTING) {
+      throw new VMTypeError("Generator is already executing");
+    }
+    if (gen.state === GEN_SUSPENDED) {
+      gen.frame.acc = sendValue;
+    }
+    gen.state = GEN_EXECUTING;
+    try {
+      const result = this.runFrame(gen.frame);
+      gen.state = GEN_COMPLETED;
+      return createIteratorResult(result, true);
+    } catch (e) {
+      if (e instanceof GeneratorSuspend) {
+        gen.state = GEN_SUSPENDED;
+        return createIteratorResult(e.value, false);
+      }
+      gen.state = GEN_COMPLETED;
+      throw e;
+    }
+  }
+
+  resumeAt(frame) {
+    this.initFeedbackVector(frame.compiledFn);
+    return this.runFrame(frame);
+  }
+
+  callFunctionValue(callee, args = [], thisValue = mkUndefined()) {
+    if (!isFunction(callee)) {
+      throw new VMTypeError(`${toDisplayString(callee)} is not a function`);
+    }
+    const fn = getPayload(callee);
+    if (fn.call) return fn.call(args, thisValue, this);
+    if (fn.compiled) {
+      if (fn.compiled.isGenerator) {
+        const frame = new RegisterFrame(
+          fn.compiled,
+          args,
+          thisValue,
+          fn.closure || null,
+        );
+        this.initFeedbackVector(fn.compiled);
+        return mkGenerator(new GeneratorObject(frame, this));
+      }
+      if (fn.compiled.isAsync) {
+        const { capability, value } = mkPromiseCapability(this.microtaskQueue);
+        const asyncFrame = new RegisterFrame(
+          fn.compiled,
+          args,
+          thisValue,
+          fn.closure || null,
+        );
+        this.initFeedbackVector(fn.compiled);
+        runAsyncWithSuspension(this, asyncFrame, capability);
+        return value;
+      }
+      if (fn.closure) {
+        const closureFrame = new RegisterFrame(
+          fn.compiled,
+          args,
+          thisValue,
+          fn.closure,
+        );
+        this.initFeedbackVector(fn.compiled);
+        return this.runFrame(closureFrame);
+      }
+      return this.execute(fn.compiled, args, thisValue);
+    }
+    throw new Error(`Cannot call function: ${fn.name || "unknown"}`);
+  }
+
+  constructFunctionValue(callee, args = []) {
+    if (isFunction(callee) && getPayload(callee).construct) {
+      return getPayload(callee).construct(args, this);
+    }
+    if (!isFunction(callee) || !getPayload(callee).compiled) {
+      throw new VMTypeError(`${toDisplayString(callee)} is not a constructor`);
+    }
+    const fn = getPayload(callee);
+    if (fn.compiled) this.initFeedbackVector(fn.compiled);
+    const stub = !fn.closure ? this.getConstructorStub(fn.compiled, fn) : null;
+    if (stub) return stub(args);
+    const newObj = createJSObject();
+    if (!fn.prototypeObj) {
+      fn.prototypeObj = createJSObject();
+      fn.prototypeObj.constructorRef = fn;
+    }
+    newObj.setPrototype(fn.prototypeObj);
+    const thisVal = mkObject(newObj);
+    const returnVal = this.callFunctionValue(callee, args, thisVal);
+    return isObject(returnVal) ? returnVal : thisVal;
+  }
+
+  getConstructorStub(compiledFn, fn) {
+    if (compiledFn.constructorStub !== undefined)
+      return compiledFn.constructorStub;
+    const info = analyzeSimpleConstructor(compiledFn);
+    if (!info) {
+      compiledFn.constructorStub = null;
+      return null;
+    }
+    const shapeObj = createJSObject();
+    if (fn) {
+      if (!fn.prototypeObj) {
+        fn.prototypeObj = createJSObject();
+        fn.prototypeObj.constructorRef = fn;
+      }
+      shapeObj.setPrototype(fn.prototypeObj);
+    }
+    for (const field of info) shapeObj.setProperty(field.name, mkUndefined());
+    const hiddenClass = shapeObj.hiddenClass;
+    const fieldMap = info.map((field) => {
+      const desc = hiddenClass.lookupProperty(field.name);
+      return desc ? { field, offset: desc.offset } : null;
+    });
+    if (!fieldMap.every((x) => x)) {
+      compiledFn.constructorStub = null;
+      return null;
+    }
+    compiledFn.constructorStub = (args) => {
+      const obj = createJSObject();
+      if (fn.prototypeObj) obj.setPrototype(fn.prototypeObj);
+      for (const item of fieldMap) {
+        let val;
+        if (item.field.source.kind === "local")
+          val = args[item.field.source.index] || mkUndefined();
+        else if (item.field.source.kind === "const")
+          val = mkNumber(compiledFn.constants[item.field.source.index]);
+        else if (item.field.source.kind === "null") val = mkNull();
+        else if (item.field.source.kind === "true") val = mkBool(true);
+        else if (item.field.source.kind === "false") val = mkBool(false);
+        else val = mkUndefined();
+        obj.setProperty(item.field.name, val);
+      }
+      return mkObject(obj);
+    };
+    return compiledFn.constructorStub;
+  }
+
+  runFrame(frame) {
+    const { compiledFn } = frame;
+    const instructions = compiledFn.instructions;
+    const funcName = compiledFn.name || "<anonymous>";
+    let loopCounter = 0;
+
+    this.callStack.push(funcName);
+    this.activeFrames.push(frame);
+
+    try {
+      while (frame.pc < instructions.length) {
+        try {
+          const instr = instructions[frame.pc];
+          const op = instr.opcode;
+          const operands = instr.operands;
+
+          tracer.interpret(
+            funcName,
+            bytecode.rOpcodeName(op),
+            operands.length > 0 ? `[${operands.join(", ")}]` : "",
+          );
+
+          frame.pc++;
+
+          switch (op) {
+            case bytecode.ROP_LDA_CONST: {
+              const constVal = compiledFn.constants[operands[0]];
+              frame.acc = this.wrapConstant(constVal);
+              break;
+            }
+
+            case bytecode.ROP_LDA_REG: {
+              frame.acc = frame.getReg(operands[0]);
+              break;
+            }
+
+            case bytecode.ROP_STAR: {
+              frame.setReg(operands[0], frame.acc);
+              break;
+            }
+
+            case bytecode.ROP_MOV: {
+              frame.setReg(operands[1], frame.getReg(operands[0]));
+              break;
+            }
+
+            case bytecode.ROP_LDA_GLOBAL: {
+              const name = compiledFn.constants[operands[0]];
+              const val = this.globalCells.read(name);
+              if (val === undefined) {
+                throw new VMTypeError(`${name} is not defined`);
+              }
+              frame.acc = val;
+              break;
+            }
+
+            case bytecode.ROP_STA_GLOBAL: {
+              const name = compiledFn.constants[operands[0]];
+              this.globalCells.write(name, frame.acc);
+              break;
+            }
+
+            case bytecode.ROP_LDA_PROP: {
+              frame.acc = handleLdaProp(
+                this,
+                frame,
+                operands,
+                compiledFn,
+                funcName,
+              );
+              break;
+            }
+
+            case bytecode.ROP_STA_PROP: {
+              handleStaProp(this, frame, operands, compiledFn, funcName);
+              break;
+            }
+
+            case bytecode.ROP_LDA_INDEX: {
+              frame.acc = handleLdaIndex(
+                this,
+                frame,
+                operands,
+                compiledFn,
+                funcName,
+              );
+              break;
+            }
+
+            case bytecode.ROP_STA_INDEX: {
+              handleStaIndex(this, frame, operands, compiledFn, funcName);
+              break;
+            }
+
+            case bytecode.ROP_ADD: {
+              const { left, right } = getBinaryOperands(
+                frame,
+                operands,
+                compiledFn,
+              );
+              if (isSmi(left) && isSmi(right)) {
+                const result = getPayload(left) + getPayload(right);
+                frame.acc =
+                  result === (result | 0) ? mkSmi(result) : mkDouble(result);
+              } else if (isNumber(left) && isNumber(right)) {
+                frame.acc = mkDouble(toNumber(left) + toNumber(right));
+              } else if (isString(left) || isString(right)) {
+                frame.acc = mkString(
+                  toDisplayString(left) + toDisplayString(right),
+                );
+              } else {
+                frame.acc = mkDouble(toNumber(left) + toNumber(right));
+              }
+              break;
+            }
+
+            case bytecode.ROP_SUB: {
+              const { left, right } = getBinaryOperands(
+                frame,
+                operands,
+                compiledFn,
+              );
+              if (isSmi(left) && isSmi(right)) {
+                const result = getPayload(left) - getPayload(right);
+                frame.acc =
+                  result === (result | 0) ? mkSmi(result) : mkDouble(result);
+              } else {
+                frame.acc = mkDouble(toNumber(left) - toNumber(right));
+              }
+              break;
+            }
+
+            case bytecode.ROP_MUL: {
+              const { left, right } = getBinaryOperands(
+                frame,
+                operands,
+                compiledFn,
+              );
+              if (isSmi(left) && isSmi(right)) {
+                const result = getPayload(left) * getPayload(right);
+                frame.acc =
+                  result === (result | 0) ? mkSmi(result) : mkDouble(result);
+              } else {
+                frame.acc = mkDouble(toNumber(left) * toNumber(right));
+              }
+              break;
+            }
+
+            case bytecode.ROP_DIV: {
+              const { left, right } = getBinaryOperands(
+                frame,
+                operands,
+                compiledFn,
+              );
+              const result = toNumber(left) / toNumber(right);
+              frame.acc =
+                Number.isInteger(result) && result === (result | 0)
+                  ? mkSmi(result)
+                  : mkDouble(result);
+              break;
+            }
+
+            case bytecode.ROP_MOD: {
+              const { left, right } = getBinaryOperands(
+                frame,
+                operands,
+                compiledFn,
+              );
+              if (isSmi(left) && isSmi(right) && getPayload(right) !== 0) {
+                frame.acc = mkSmi(getPayload(left) % getPayload(right));
+              } else {
+                frame.acc = mkDouble(toNumber(left) % toNumber(right));
+              }
+              break;
+            }
+
+            case bytecode.ROP_EQ: {
+              const { left, right } = getBinaryOperands(
+                frame,
+                operands,
+                compiledFn,
+              );
+              if (isSmi(left) && isSmi(right))
+                frame.acc = mkBool(getPayload(left) === getPayload(right));
+              else if (isNumber(left) && isNumber(right))
+                frame.acc = mkBool(toNumber(left) === toNumber(right));
+              else if (isString(left) && isString(right))
+                frame.acc = mkBool(getPayload(left) === getPayload(right));
+              else if (isBool(left) && isBool(right))
+                frame.acc = mkBool(getPayload(left) === getPayload(right));
+              else if (isNull(left) && isNull(right)) frame.acc = mkBool(true);
+              else if (isUndefined(left) && isUndefined(right))
+                frame.acc = mkBool(true);
+              else if (isSymbol(left) && isSymbol(right))
+                frame.acc = mkBool(getPayload(left) === getPayload(right));
+              else if (
+                (isObject(left) || isArray(left) || isFunction(left)) &&
+                (isObject(right) || isArray(right) || isFunction(right))
+              ) {
+                frame.acc = mkBool(getPayload(left) === getPayload(right));
+              } else frame.acc = mkBool(false);
+              break;
+            }
+
+            case bytecode.ROP_NEQ: {
+              const { left, right } = getBinaryOperands(
+                frame,
+                operands,
+                compiledFn,
+              );
+              if (isSmi(left) && isSmi(right))
+                frame.acc = mkBool(getPayload(left) !== getPayload(right));
+              else if (isNumber(left) && isNumber(right))
+                frame.acc = mkBool(toNumber(left) !== toNumber(right));
+              else if (isString(left) && isString(right))
+                frame.acc = mkBool(getPayload(left) !== getPayload(right));
+              else if (isBool(left) && isBool(right))
+                frame.acc = mkBool(getPayload(left) !== getPayload(right));
+              else if (isNull(left) && isNull(right)) frame.acc = mkBool(false);
+              else if (isUndefined(left) && isUndefined(right))
+                frame.acc = mkBool(false);
+              else if (isSymbol(left) && isSymbol(right))
+                frame.acc = mkBool(getPayload(left) !== getPayload(right));
+              else if (
+                (isObject(left) || isArray(left) || isFunction(left)) &&
+                (isObject(right) || isArray(right) || isFunction(right))
+              ) {
+                frame.acc = mkBool(getPayload(left) !== getPayload(right));
+              } else frame.acc = mkBool(true);
+              break;
+            }
+
+            case bytecode.ROP_LOOSE_EQ: {
+              const { left, right } = getBinaryOperands(
+                frame,
+                operands,
+                compiledFn,
+              );
+              frame.acc = mkBool(abstractLooseEqual(left, right));
+              break;
+            }
+
+            case bytecode.ROP_LOOSE_NEQ: {
+              const { left, right } = getBinaryOperands(
+                frame,
+                operands,
+                compiledFn,
+              );
+              frame.acc = mkBool(!abstractLooseEqual(left, right));
+              break;
+            }
+
+            case bytecode.ROP_LT: {
+              const { left, right } = getBinaryOperands(
+                frame,
+                operands,
+                compiledFn,
+              );
+              if (isNumber(left) && isNumber(right))
+                frame.acc = mkBool(toNumber(left) < toNumber(right));
+              else if (isString(left) && isString(right))
+                frame.acc = mkBool(getPayload(left) < getPayload(right));
+              else frame.acc = mkBool(toNumber(left) < toNumber(right));
+              break;
+            }
+
+            case bytecode.ROP_GT: {
+              const { left, right } = getBinaryOperands(
+                frame,
+                operands,
+                compiledFn,
+              );
+              if (isNumber(left) && isNumber(right))
+                frame.acc = mkBool(toNumber(left) > toNumber(right));
+              else if (isString(left) && isString(right))
+                frame.acc = mkBool(getPayload(left) > getPayload(right));
+              else frame.acc = mkBool(toNumber(left) > toNumber(right));
+              break;
+            }
+
+            case bytecode.ROP_LTE: {
+              const { left, right } = getBinaryOperands(
+                frame,
+                operands,
+                compiledFn,
+              );
+              if (isNumber(left) && isNumber(right))
+                frame.acc = mkBool(toNumber(left) <= toNumber(right));
+              else if (isString(left) && isString(right))
+                frame.acc = mkBool(getPayload(left) <= getPayload(right));
+              else frame.acc = mkBool(toNumber(left) <= toNumber(right));
+              break;
+            }
+
+            case bytecode.ROP_GTE: {
+              const { left, right } = getBinaryOperands(
+                frame,
+                operands,
+                compiledFn,
+              );
+              if (isNumber(left) && isNumber(right))
+                frame.acc = mkBool(toNumber(left) >= toNumber(right));
+              else if (isString(left) && isString(right))
+                frame.acc = mkBool(getPayload(left) >= getPayload(right));
+              else frame.acc = mkBool(toNumber(left) >= toNumber(right));
+              break;
+            }
+
+            case bytecode.ROP_NOT: {
+              const fbSlotIdx = operands.length > 0 ? operands[0] : -1;
+              if (fbSlotIdx >= 0 && compiledFn.feedbackVector) {
+                const slot = compiledFn.feedbackVector.getSlot(fbSlotIdx);
+                if (slot) slot.recordUnaryOp(getTag(frame.acc));
+              }
+              frame.acc = mkBool(!toBool(frame.acc));
+              break;
+            }
+
+            case bytecode.ROP_NEG: {
+              const fbSlotIdx = operands.length > 0 ? operands[0] : -1;
+              if (fbSlotIdx >= 0 && compiledFn.feedbackVector) {
+                const slot = compiledFn.feedbackVector.getSlot(fbSlotIdx);
+                if (slot) slot.recordUnaryOp(getTag(frame.acc));
+              }
+              frame.acc = mkNumber(-toNumber(frame.acc));
+              break;
+            }
+
+            case bytecode.ROP_TYPEOF: {
+              frame.acc = mkString(typeOf(frame.acc));
+              break;
+            }
+
+            case bytecode.ROP_JUMP: {
+              const target = operands[0];
+              if (target < frame.pc) {
+                loopCounter++;
+                if (compiledFn.feedbackVector) {
+                  compiledFn.feedbackVector.decrementLoopBudget(1);
+                }
+                if (
+                  this.jitEngine &&
+                  this.tieringPolicy &&
+                  compiledFn.optimizedCode &&
+                  typeof compiledFn.optimizedCode._osrEntry === "function" &&
+                  (typeof this.tieringPolicy.shouldOSR === "function"
+                    ? this.tieringPolicy.shouldOSR(compiledFn, loopCounter)
+                    : loopCounter >= this.tieringPolicy.loopOsrThreshold) &&
+                  !compiledFn.disableOptimization
+                ) {
+                  const osrLocals = frame.registers.slice();
+                  return compiledFn.optimizedCode._osrEntry(
+                    osrLocals,
+                    target,
+                    frame.thisValue,
+                    frame.acc,
+                  );
+                }
+              }
+              frame.pc = target;
+              continue;
+            }
+
+            case bytecode.ROP_JUMP_IF_FALSE: {
+              if (!toBool(frame.acc)) {
+                const target = operands[0];
+                if (target < frame.pc) {
+                  loopCounter++;
+                  if (compiledFn.feedbackVector) {
+                    compiledFn.feedbackVector.decrementLoopBudget(1);
+                  }
+                }
+                frame.pc = target;
+                continue;
+              }
+              break;
+            }
+
+            case bytecode.ROP_JUMP_IF_TRUE: {
+              if (toBool(frame.acc)) {
+                const target = operands[0];
+                if (target < frame.pc) {
+                  loopCounter++;
+                  if (compiledFn.feedbackVector) {
+                    compiledFn.feedbackVector.decrementLoopBudget(1);
+                  }
+                }
+                frame.pc = target;
+                continue;
+              }
+              break;
+            }
+
+            case bytecode.ROP_CALL: {
+              const funcReg = operands[0];
+              const firstArgReg = operands[1];
+              const argCount = operands[2];
+              const fbSlotIdx = operands[3];
+              const callee = frame.getReg(funcReg);
+              const args = [];
+              for (let i = 0; i < argCount; i++)
+                args.push(frame.getReg(firstArgReg + i));
+              const slot = compiledFn.feedbackVector
+                ? compiledFn.feedbackVector.getSlot(fbSlotIdx)
+                : null;
+              frame.acc = callFunction(
+                callee,
+                args,
+                mkUndefined(),
+                slot,
+                this,
+                frame,
+              );
+              break;
+            }
+
+            case bytecode.ROP_CALL_METHOD: {
+              const recvReg = operands[0];
+              const firstArgReg = operands[1];
+              const argCount = operands[2];
+              const fbSlotIdx = operands[3];
+              const receiver = frame.getReg(recvReg);
+              const callee = frame.acc;
+              const args = [];
+              for (let i = 0; i < argCount; i++)
+                args.push(frame.getReg(firstArgReg + i));
+              const slot = compiledFn.feedbackVector
+                ? compiledFn.feedbackVector.getSlot(fbSlotIdx)
+                : null;
+              frame.acc = callFunction(
+                callee,
+                args,
+                receiver,
+                slot,
+                this,
+                frame,
+              );
+              break;
+            }
+
+            case bytecode.ROP_CALL_SPREAD: {
+              const funcReg = operands[0];
+              const argsArrReg = operands[1];
+              const recvReg = operands[2];
+              const fbSlotIdx = operands[3];
+              const callee = frame.getReg(funcReg);
+              const argsArr = getPayload(frame.getReg(argsArrReg));
+              const args = argsArr.elements.slice();
+              const thisVal = recvReg ? frame.getReg(recvReg) : mkUndefined();
+              const slot = compiledFn.feedbackVector
+                ? compiledFn.feedbackVector.getSlot(fbSlotIdx)
+                : null;
+              frame.acc = callFunction(
+                callee,
+                args,
+                thisVal,
+                slot,
+                this,
+                frame,
+              );
+              break;
+            }
+
+            case bytecode.ROP_NEW: {
+              frame.acc = handleNew(this, frame, operands, compiledFn);
+              break;
+            }
+
+            case bytecode.ROP_NEW_OBJECT: {
+              frame.acc = mkObject(createJSObject());
+              break;
+            }
+
+            case bytecode.ROP_SET_PROTO: {
+              const objReg = operands[0];
+              const protoReg = operands[1];
+              const obj = frame.getReg(objReg);
+              const proto = frame.getReg(protoReg);
+              if (isObject(obj) && isObject(proto)) {
+                getPayload(obj).setPrototype(getPayload(proto));
+              }
+              break;
+            }
+
+            case bytecode.ROP_DEFINE_ACCESSOR: {
+              handleDefineAccessor(this, frame, operands, compiledFn);
+              break;
+            }
+
+            case bytecode.ROP_NEW_ARRAY: {
+              const firstReg = operands[0];
+              const count = operands[1];
+              const elements = [];
+              for (let i = 0; i < count; i++) {
+                elements.push(frame.getReg(firstReg + i));
+              }
+              frame.acc = mkArray(createJSArray(elements));
+              break;
+            }
+
+            case bytecode.ROP_RETURN: {
+              frame.closeUpvalues();
+              return frame.acc;
+            }
+
+            case bytecode.ROP_LDA_UNDEFINED: {
+              frame.acc = mkUndefined();
+              break;
+            }
+            case bytecode.ROP_LDA_NULL: {
+              frame.acc = mkNull();
+              break;
+            }
+            case bytecode.ROP_LDA_TRUE: {
+              frame.acc = mkBool(true);
+              break;
+            }
+            case bytecode.ROP_LDA_FALSE: {
+              frame.acc = mkBool(false);
+              break;
+            }
+            case bytecode.ROP_LDA_THIS: {
+              frame.acc = frame.thisValue;
+              break;
+            }
+
+            case bytecode.ROP_LDA_UPVALUE: {
+              const idx = operands[0];
+              const upvalue = compiledFn.upvalues[idx];
+              frame.acc = throwIfTDZ(
+                frame.closureEnv.getUpvalue(idx),
+                upvalue ? upvalue.name : "<binding>",
+              );
+              break;
+            }
+
+            case bytecode.ROP_STA_UPVALUE: {
+              frame.closureEnv.setUpvalue(operands[0], frame.acc);
+              break;
+            }
+
+            case bytecode.ROP_MAKE_CLOSURE: {
+              const constIdx = operands[0];
+              const innerFunc = compiledFn.constants[constIdx];
+              const cells = [];
+              for (let i = 0; i < innerFunc.upvalues.length; i++) {
+                const upval = innerFunc.upvalues[i];
+                if (upval.outerType === "local") {
+                  cells.push(frame.getOrCreateUpvalueCell(upval.outerSlot));
+                } else if (upval.outerType === "upvalue") {
+                  cells.push(frame.closureEnv.cells[upval.outerSlot]);
+                }
+              }
+              const env = new Environment(cells);
+              const closure = new JSFunction(innerFunc, innerFunc.name, env);
+              frame.acc = mkFunction(closure);
+              break;
+            }
+
+            case bytecode.ROP_GET_KEYS: {
+              const objReg = operands[0];
+              const obj = frame.getReg(objReg);
+              if (isObject(obj)) {
+                const keys = runtimeOwnKeys(obj, this);
+                const keyValues = keys.map((k) => mkString(k));
+                frame.acc = mkArray(createJSArray(keyValues));
+              } else {
+                frame.acc = mkArray(createJSArray([]));
+              }
+              break;
+            }
+
+            case bytecode.ROP_GET_LENGTH: {
+              const objReg = operands[0];
+              const obj = frame.getReg(objReg);
+              if (isArray(obj)) {
+                frame.acc = mkSmi(getPayload(obj).getLength());
+              } else if (isString(obj)) {
+                frame.acc = mkSmi(getPayload(obj).length);
+              } else {
+                frame.acc = mkSmi(0);
+              }
+              break;
+            }
+
+            case bytecode.ROP_TRY_START: {
+              frame.exceptionHandlers.push({
+                catchPC: operands[0],
+              });
+              break;
+            }
+
+            case bytecode.ROP_TRY_END: {
+              frame.exceptionHandlers.pop();
+              break;
+            }
+
+            case bytecode.ROP_THROW: {
+              const errorValue = frame.acc;
+              if (frame.exceptionHandlers.length > 0) {
+                const handler = frame.exceptionHandlers.pop();
+                frame.acc = errorValue;
+                frame.pc = handler.catchPC;
+              } else {
+                frame.closeUpvalues();
+                throw new RegisterMiniJITException(errorValue);
+              }
+              break;
+            }
+
+            case bytecode.ROP_NEW_REGEX: {
+              const constIdx = operands[0];
+              const regexData = compiledFn.constants[constIdx];
+              const nativeRegex = new RegExp(
+                regexData.pattern,
+                regexData.flags,
+              );
+              frame.acc = mkRegex(nativeRegex);
+              break;
+            }
+
+            case bytecode.ROP_GET_ITERATOR: {
+              const obj = frame.acc;
+              frame.acc = getIterator(obj, this);
+              break;
+            }
+
+            case bytecode.ROP_ITER_NEXT: {
+              const iter = frame.acc;
+              if (!isIterator(iter))
+                throw new VMTypeError("value is not an iterator");
+              frame.acc = getPayload(iter).nextValue(this);
+              break;
+            }
+
+            case bytecode.ROP_ITER_DONE: {
+              const result = frame.acc;
+              frame.acc = mkBool(iteratorDone(result));
+              break;
+            }
+
+            case bytecode.ROP_ITER_VALUE: {
+              const result = frame.acc;
+              frame.acc = iteratorValue(result);
+              break;
+            }
+
+            case bytecode.ROP_AWAIT: {
+              const promiseVal = frame.acc;
+              if (isPromise(promiseVal)) {
+                const p = getPayload(promiseVal);
+                if (p.state === PROMISE_FULFILLED) {
+                  frame.acc = p.result;
+                } else if (p.state === PROMISE_REJECTED) {
+                  throw new RegisterMiniJITException(p.result);
+                } else {
+                  throw new AsyncSuspend(frame, promiseVal);
+                }
+              } else {
+                frame.acc = promiseVal;
+              }
+              break;
+            }
+
+            case bytecode.ROP_YIELD: {
+              throw new GeneratorSuspend(frame.acc, frame.pc);
+            }
+
+            case bytecode.ROP_BITAND: {
+              const { left, right } = getBinaryOperands(
+                frame,
+                operands,
+                compiledFn,
+              );
+              frame.acc = mkSmi((toNumber(left) | 0) & (toNumber(right) | 0));
+              break;
+            }
+
+            case bytecode.ROP_BITOR: {
+              const { left, right } = getBinaryOperands(
+                frame,
+                operands,
+                compiledFn,
+              );
+              frame.acc = mkSmi(toNumber(left) | 0 | (toNumber(right) | 0));
+              break;
+            }
+
+            case bytecode.ROP_BITXOR: {
+              const { left, right } = getBinaryOperands(
+                frame,
+                operands,
+                compiledFn,
+              );
+              frame.acc = mkSmi((toNumber(left) | 0) ^ (toNumber(right) | 0));
+              break;
+            }
+
+            case bytecode.ROP_SHL: {
+              const { left, right } = getBinaryOperands(
+                frame,
+                operands,
+                compiledFn,
+              );
+              frame.acc = mkSmi(
+                (toNumber(left) | 0) << (toNumber(right) & 0x1f),
+              );
+              break;
+            }
+
+            case bytecode.ROP_SHR: {
+              const { left, right } = getBinaryOperands(
+                frame,
+                operands,
+                compiledFn,
+              );
+              frame.acc = mkSmi(
+                (toNumber(left) | 0) >> (toNumber(right) & 0x1f),
+              );
+              break;
+            }
+
+            case bytecode.ROP_USHR: {
+              const { left, right } = getBinaryOperands(
+                frame,
+                operands,
+                compiledFn,
+              );
+              const result = (toNumber(left) | 0) >>> (toNumber(right) & 0x1f);
+              frame.acc =
+                result === (result | 0) ? mkSmi(result) : mkDouble(result);
+              break;
+            }
+
+            case bytecode.ROP_POW: {
+              const { left, right } = getBinaryOperands(
+                frame,
+                operands,
+                compiledFn,
+              );
+              const result = toNumber(left) ** toNumber(right);
+              frame.acc =
+                Number.isInteger(result) && result === (result | 0)
+                  ? mkSmi(result)
+                  : mkDouble(result);
+              break;
+            }
+
+            case bytecode.ROP_BITNOT: {
+              const fbSlotIdx = operands.length > 0 ? operands[0] : -1;
+              if (fbSlotIdx >= 0 && compiledFn.feedbackVector) {
+                const slot = compiledFn.feedbackVector.getSlot(fbSlotIdx);
+                if (slot) slot.recordUnaryOp(getTag(frame.acc));
+              }
+              frame.acc = mkSmi(~(toNumber(frame.acc) | 0));
+              break;
+            }
+
+            case bytecode.ROP_INSTANCEOF: {
+              const { left, right } = getBinaryOperands(
+                frame,
+                operands,
+                compiledFn,
+              );
+              frame.acc = handleInstanceof(this, frame, left, right);
+              break;
+            }
+
+            case bytecode.ROP_IN: {
+              const { left, right } = getBinaryOperands(
+                frame,
+                operands,
+                compiledFn,
+              );
+              frame.acc = handleIn(this, frame, left, right);
+              break;
+            }
+
+            case bytecode.ROP_VOID: {
+              frame.acc = mkUndefined();
+              break;
+            }
+
+            case bytecode.ROP_DELETE_PROP: {
+              frame.acc = handleDeleteProp(this, frame, operands, compiledFn);
+              break;
+            }
+
+            case bytecode.ROP_IS_NULLISH: {
+              frame.acc = mkBool(isNull(frame.acc) || isUndefined(frame.acc));
+              break;
+            }
+
+            case bytecode.ROP_REST_ARGS: {
+              const startIdx = operands[0];
+              const restElements = frame.originalArgs.slice(startIdx);
+              frame.acc = mkArray(createJSArray(restElements));
+              break;
+            }
+
+            case bytecode.ROP_SPREAD_ARRAY: {
+              const arrReg = operands[0];
+              const targetArr = getPayload(frame.getReg(arrReg));
+              const sourceVal = frame.acc;
+              if (isArray(sourceVal)) {
+                const srcArr = getPayload(sourceVal);
+                for (let si = 0; si < srcArr.elements.length; si++) {
+                  targetArr.push(srcArr.elements[si]);
+                }
+              }
+              break;
+            }
+
+            case bytecode.ROP_COPY_PROPS: {
+              const objReg = operands[0];
+              const targetObj = getPayload(frame.getReg(objReg));
+              const sourceVal = frame.acc;
+              if (isObject(sourceVal)) {
+                for (const key of runtimeOwnKeys(sourceVal, this)) {
+                  const val = runtimeGetProperty(sourceVal, key, this);
+                  targetObj.setProperty(key, val);
+                }
+              }
+              break;
+            }
+
+            case bytecode.ROP_STA_COMPUTED_PROP: {
+              const objReg = operands[0];
+              const keyReg = operands[1];
+              const objVal = frame.getReg(objReg);
+              const key = toDisplayString(frame.getReg(keyReg));
+              runtimeSetProperty(objVal, key, frame.acc, this);
+              break;
+            }
+
+            case bytecode.ROP_ARRAY_PUSH: {
+              const arrReg = operands[0];
+              const targetArr = getPayload(frame.getReg(arrReg));
+              targetArr.push(frame.acc);
+              break;
+            }
+
+            default: {
+              throw new Error(
+                `Unknown register opcode 0x${op.toString(16)} (${bytecode.rOpcodeName(op)}) ` +
+                  `at pc=${frame.pc - 1} in "${funcName}"`,
+              );
+            }
+          }
+        } catch (e) {
+          if (frame.exceptionHandlers.length > 0) {
+            if (e instanceof RegisterMiniJITException) {
+              const handler = frame.exceptionHandlers.pop();
+              frame.acc = e.value;
+              frame.pc = handler.catchPC;
+              continue;
+            }
+            if (e instanceof VMError) {
+              const handler = frame.exceptionHandlers.pop();
+              frame.acc = vmErrorToTagged(
+                e,
+                mkString,
+                mkObject,
+                createJSObject,
+              );
+              frame.pc = handler.catchPC;
+              continue;
+            }
+          }
+          throw e;
+        }
+      }
+
+      frame.closeUpvalues();
+      return mkUndefined();
+    } finally {
+      if (
+        this.tieringPolicy &&
+        typeof this.tieringPolicy.recordLoopIterations === "function"
+      ) {
+        this.tieringPolicy.recordLoopIterations(compiledFn, loopCounter);
+      }
+      this.callStack.pop();
+      this.activeFrames.pop();
+    }
+  }
+}
