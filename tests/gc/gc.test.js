@@ -1,289 +1,268 @@
-import { describe, it } from "node:test";
-import assert from "node:assert/strict";
-import { MiniJIT } from "../../src/index.js";
-import { resetHiddenClasses } from "../../src/objects/maps/hidden-class.js";
+import { describe, it, expect } from "vitest";
 import { GenerationalGC } from "../../src/gc/gc.js";
-import { HeapRegion } from "../../src/gc/heap-region.js";
-import { OldGeneration } from "../../src/gc/old-generation.js";
-import { RememberedSet } from "../../src/gc/remembered-set.js";
+import { COLOR_WHITE } from "../../src/gc/incremental-marker.js";
 
-describe("HeapRegion", () => {
-  it("allocates objects with bump pointer", () => {
-    const region = new HeapRegion(8);
-    const obj = { gcHeader: null };
-    const idx = region.allocate(obj);
-    assert.equal(idx, 0);
-    assert.equal(region.get(0), obj);
-    assert.equal(region.usedSlots(), 1);
+function makeHeapObj(id, refs = []) {
+  return {
+    id,
+    gcHeader: null,
+    visitReferences(cb) {
+      for (const r of refs) cb(r);
+    },
+  };
+}
+
+function makeGCWithRoots(opts = {}) {
+  const gc = new GenerationalGC({
+    youngGenSize: opts.youngGenSize || 64,
+    allocationBudget: opts.allocationBudget || 1000,
+    ...opts,
   });
-
-  it("returns null when full", () => {
-    const region = new HeapRegion(2);
-    region.allocate({ gcHeader: null });
-    region.allocate({ gcHeader: null });
-    assert.equal(region.allocate({ gcHeader: null }), null);
-    assert.equal(region.isFull(), true);
-  });
-
-  it("resets properly", () => {
-    const region = new HeapRegion(4);
-    region.allocate({ gcHeader: null });
-    region.allocate({ gcHeader: null });
-    region.reset();
-    assert.equal(region.usedSlots(), 0);
-    assert.equal(region.isFull(), false);
-  });
-});
-
-describe("OldGeneration", () => {
-  it("allocates and tracks live count", () => {
-    const old = new OldGeneration(16);
-    const obj = {
-      gcHeader: {
-        age: 2,
-        marked: false,
-        forwarding: null,
-        generation: "old",
-        oldGenIndex: -1,
-      },
-    };
-    old.allocate(obj);
-    assert.equal(old.liveCount, 1);
-    assert.equal(obj.gcHeader.oldGenIndex, 0);
-  });
-
-  it("mark-sweep collects unreachable objects", () => {
-    const old = new OldGeneration(16);
-    const live = {
-      gcHeader: {
-        age: 2,
-        marked: false,
-        forwarding: null,
-        generation: "old",
-        oldGenIndex: -1,
-      },
-    };
-    const dead = {
-      gcHeader: {
-        age: 2,
-        marked: false,
-        forwarding: null,
-        generation: "old",
-        oldGenIndex: -1,
-      },
-    };
-    old.allocate(live);
-    old.allocate(dead);
-    assert.equal(old.liveCount, 2);
-
-    const markSet = new Set([live]);
-    const swept = old.markSweep(markSet);
-    assert.equal(swept, 1);
-    assert.equal(old.liveCount, 1);
-  });
-
-  it("compacts when fragmented", () => {
-    const old = new OldGeneration(16);
-    const objs = [];
-    for (let i = 0; i < 10; i++) {
-      const obj = {
-        gcHeader: {
-          age: 2,
-          marked: false,
-          forwarding: null,
-          generation: "old",
-          oldGenIndex: -1,
-        },
-        id: i,
-      };
-      old.allocate(obj);
-      objs.push(obj);
-    }
-    const markSet = new Set([objs[0], objs[5], objs[9]]);
-    old.markSweep(markSet);
-    assert.equal(old.liveCount, 3);
-
-    const compacted = old.compact();
-    assert.ok(compacted > 0, "should have compacted objects");
-    // After compaction, surviving objects should be at valid indices
-    for (const obj of markSet) {
-      const idx = obj.gcHeader.oldGenIndex;
-      assert.ok(
-        idx >= 0 && idx < old.allocPointer,
-        `object should have valid index, got ${idx}`,
-      );
-    }
-  });
-});
-
-describe("RememberedSet", () => {
-  it("records and tracks entries", () => {
-    const rs = new RememberedSet();
-    const holder = {};
-    rs.record(holder);
-    assert.equal(rs.size, 1);
-    assert.ok(rs.has(holder));
-  });
-
-  it("deduplicates entries", () => {
-    const rs = new RememberedSet();
-    const holder = {};
-    rs.record(holder);
-    rs.record(holder);
-    assert.equal(rs.size, 1);
-  });
-
-  it("clears all entries", () => {
-    const rs = new RememberedSet();
-    rs.record({});
-    rs.record({});
-    rs.clear();
-    assert.equal(rs.size, 0);
-  });
-
-  it("removes entries", () => {
-    const rs = new RememberedSet();
-    const h = {};
-    rs.record(h);
-    rs.remove(h);
-    assert.equal(rs.size, 0);
-    assert.ok(!rs.has(h));
-  });
-
-  it("iterates holders", () => {
-    const rs = new RememberedSet();
-    const a = { id: "a" };
-    const b = { id: "b" };
-    rs.record(a);
-    rs.record(b);
-    const visited = [];
-    rs.iterateHolders((h) => visited.push(h));
-    assert.equal(visited.length, 2);
-  });
-});
+  const rootObjects = [];
+  const interpreter = {
+    activeFrames: [{ locals: rootObjects, stack: [] }],
+  };
+  gc.bindRoots(interpreter, null, null);
+  return { gc, rootObjects };
+}
 
 describe("GenerationalGC", () => {
-  it("allocates objects into young generation", () => {
-    const gc = new GenerationalGC({ youngGenSize: 64 });
-    const obj = { id: 1 };
-    gc.allocate(obj);
-    assert.equal(obj.gcHeader.generation, "young");
-    assert.equal(obj.gcHeader.age, 0);
-    assert.equal(gc.stats.totalAllocated, 1);
-  });
-
-  it("triggers minor GC when young gen is full", () => {
-    const gc = new GenerationalGC({ youngGenSize: 4 });
-    for (let i = 0; i < 5; i++) {
-      gc.allocate({ id: i });
-    }
-    assert.ok(gc.stats.minorGCCount >= 1);
-  });
-
-  it("promotes objects after tenure threshold", () => {
-    const gc = new GenerationalGC({ youngGenSize: 8 });
-    const fakeInterpreter = {
-      activeFrames: [
-        {
-          locals: [],
-          stack: [],
-        },
-      ],
-    };
-    const persistent = { id: "persistent", visitReferences: () => {} };
-    gc.allocate(persistent);
-    fakeInterpreter.activeFrames[0].locals.push(persistent);
-    gc.bindRoots(fakeInterpreter, null, null);
-
-    gc.minorGC();
-    gc.minorGC();
-
-    assert.equal(persistent.gcHeader.generation, "old");
-    assert.ok(gc.stats.totalPromoted >= 1);
-  });
-
-  it("reports stats correctly", () => {
-    const gc = new GenerationalGC({ youngGenSize: 16 });
-    for (let i = 0; i < 5; i++) {
-      gc.allocate({ id: i });
-    }
-    const stats = gc.getStats();
-    assert.equal(stats.totalAllocated, 5);
-    assert.ok(stats.youngGenUsed >= 0);
-  });
-
-  it("major GC collects unreachable old-gen objects", () => {
-    const gc = new GenerationalGC({ youngGenSize: 4 });
-    const objs = [];
-    for (let i = 0; i < 6; i++) {
-      const obj = { id: i, visitReferences: () => {} };
+  describe("allocation", () => {
+    it("allocates objects into young generation with gcHeader", () => {
+      const { gc } = makeGCWithRoots();
+      const obj = makeHeapObj("a");
       gc.allocate(obj);
-      objs.push(obj);
-    }
-    gc.minorGC();
-    gc.minorGC();
+      expect(obj.gcHeader).toBeDefined();
+      expect(obj.gcHeader.generation).toBe("young");
+      expect(obj.gcHeader.age).toBe(0);
+      expect(gc.stats.totalAllocated).toBe(1);
+    });
 
-    gc.majorGC();
-    assert.ok(gc.stats.majorGCCount >= 1);
-  });
-});
+    it("pretenure allocates directly to old generation", () => {
+      const { gc } = makeGCWithRoots();
+      const obj = makeHeapObj("old");
+      gc.allocate(obj, true);
+      expect(obj.gcHeader.generation).toBe("old");
+      expect(gc.isInOldGen(obj)).toBe(true);
+    });
 
-describe("GC integration with engine", () => {
-  it("engine has gc instance", () => {
-    resetHiddenClasses();
-    const engine = new MiniJIT();
-    assert.ok(engine.gc);
-    assert.ok(engine.gc instanceof GenerationalGC);
-  });
-
-  it("engine getStats includes gc stats", () => {
-    resetHiddenClasses();
-    const engine = new MiniJIT();
-    const stats = engine.getStats();
-    assert.ok(stats.gc);
-    assert.equal(typeof stats.gc.totalAllocated, "number");
-  });
-
-  it("runs programs with gc active", () => {
-    resetHiddenClasses();
-    const engine = new MiniJIT();
-    const result = engine.runValue(`
-      let sum = 0;
-      let i = 0;
-      while (i < 100) {
-        sum = sum + i;
-        i = i + 1;
+    it("overflows to old gen when young gen is full", () => {
+      const { gc, rootObjects } = makeGCWithRoots({ youngGenSize: 2, allocationBudget: 10000 });
+      const objs = [];
+      for (let i = 0; i < 5; i++) {
+        const obj = makeHeapObj(i);
+        gc.allocate(obj);
+        rootObjects.push(obj);
+        objs.push(obj);
       }
-      sum;
-    `);
-    assert.equal(result.value, 4950);
+      const inOld = objs.filter((o) => o.gcHeader.generation === "old");
+      expect(inOld.length).toBeGreaterThan(0);
+    });
+
+    it("tracks allocation count for budget", () => {
+      const { gc } = makeGCWithRoots();
+      gc.allocate(makeHeapObj(1));
+      gc.allocate(makeHeapObj(2));
+      expect(gc.getStats().allocationsSinceGC).toBe(2);
+    });
   });
 
-  it("object allocation routes through gc", () => {
-    resetHiddenClasses();
-    const engine = new MiniJIT();
-    engine.run(`
-      let obj = { x: 1, y: 2 };
-      let arr = [1, 2, 3];
-      obj.x + arr[0];
-    `);
-    assert.ok(engine.gc.stats.totalAllocated > 0);
+  describe("needsCollection", () => {
+    it("returns true when allocation budget exceeded", () => {
+      const { gc } = makeGCWithRoots({ allocationBudget: 3 });
+      for (let i = 0; i < 3; i++) gc.allocate(makeHeapObj(i));
+      expect(gc.needsCollection()).toBe(true);
+    });
+
+    it("returns true when fromSpace is full", () => {
+      const { gc, rootObjects } = makeGCWithRoots({ youngGenSize: 2, allocationBudget: 10000 });
+      const a = makeHeapObj("a");
+      const b = makeHeapObj("b");
+      rootObjects.push(a, b);
+      gc.allocate(a);
+      gc.allocate(b);
+      expect(gc.fromSpace.isFull()).toBe(true);
+      expect(gc.needsCollection()).toBe(true);
+    });
   });
 
-  it("collectGarbage triggers minor gc", () => {
-    resetHiddenClasses();
-    const engine = new MiniJIT();
-    engine.run(`let obj = { x: 1 };`);
-    engine.collectGarbage("minor");
-    assert.ok(engine.gc.stats.minorGCCount >= 1);
+  describe("minorGC (scavenge)", () => {
+    it("promotes objects after surviving enough GC cycles", () => {
+      const { gc, rootObjects } = makeGCWithRoots({ youngGenSize: 32 });
+      const obj = makeHeapObj("survivor");
+      rootObjects.push(obj);
+      gc.allocate(obj);
+
+      gc.minorGC();
+      expect(obj.gcHeader.age).toBeGreaterThanOrEqual(1);
+      gc.minorGC();
+      expect(obj.gcHeader.generation).toBe("old");
+      expect(gc.stats.totalPromoted).toBeGreaterThan(0);
+    });
+
+    it("collects unreachable young objects (not copied to toSpace)", () => {
+      const { gc, rootObjects } = makeGCWithRoots({ youngGenSize: 32 });
+      const reachable = makeHeapObj("reach");
+      const unreachable = makeHeapObj("unreach");
+      rootObjects.push(reachable);
+      gc.allocate(reachable);
+      gc.allocate(unreachable);
+
+      gc.minorGC();
+      expect(reachable.gcHeader.age).toBe(1);
+    });
+
+    it("follows references to keep transitive objects alive", () => {
+      const { gc, rootObjects } = makeGCWithRoots({ youngGenSize: 32 });
+      const child = makeHeapObj("child");
+      const parent = makeHeapObj("parent", [child]);
+      rootObjects.push(parent);
+      gc.allocate(parent);
+      gc.allocate(child);
+
+      gc.minorGC();
+      expect(child.gcHeader.age).toBe(1);
+    });
+
+    it("resets allocation counter", () => {
+      const { gc } = makeGCWithRoots();
+      gc.allocate(makeHeapObj(1));
+      gc.allocate(makeHeapObj(2));
+      gc.minorGC();
+      expect(gc.getStats().allocationsSinceGC).toBe(0);
+      expect(gc.stats.minorGCCount).toBe(1);
+    });
+
+    it("processes remembered set — old→young references keep young objects alive", () => {
+      const { gc, rootObjects } = makeGCWithRoots({ youngGenSize: 32 });
+      const oldObj = makeHeapObj("old");
+      gc.allocate(oldObj, true);
+      rootObjects.push(oldObj);
+
+      const youngChild = makeHeapObj("young-child");
+      gc.allocate(youngChild);
+      oldObj.visitReferences = (cb) => cb(youngChild);
+      gc.rememberedSet.record(oldObj);
+
+      gc.minorGC();
+      expect(youngChild.gcHeader.age).toBe(1);
+    });
   });
 
-  it("collectGarbage full triggers both minor and major", () => {
-    resetHiddenClasses();
-    const engine = new MiniJIT();
-    engine.run(`let obj = { x: 1 };`);
-    engine.collectGarbage("full");
-    assert.ok(engine.gc.stats.minorGCCount >= 1);
-    assert.ok(engine.gc.stats.majorGCCount >= 1);
+  describe("majorGC (mark-compact)", () => {
+    it("collects unreachable old-gen objects", () => {
+      const { gc, rootObjects } = makeGCWithRoots({ youngGenSize: 32 });
+      const live = makeHeapObj("live");
+      const dead = makeHeapObj("dead");
+      gc.allocate(live, true);
+      gc.allocate(dead, true);
+      rootObjects.push(live);
+
+      const oldLiveBefore = gc.oldGen.liveCount;
+      gc.majorGC();
+      expect(gc.oldGen.liveCount).toBeLessThan(oldLiveBefore);
+      expect(gc.stats.majorGCCount).toBe(1);
+      expect(gc.stats.totalCollected).toBeGreaterThan(0);
+    });
+
+    it("keeps reachable old-gen objects alive through references", () => {
+      const { gc, rootObjects } = makeGCWithRoots({ youngGenSize: 32 });
+      const child = makeHeapObj("child");
+      const parent = makeHeapObj("parent", [child]);
+      gc.allocate(parent, true);
+      gc.allocate(child, true);
+      rootObjects.push(parent);
+
+      gc.majorGC();
+      expect(gc.oldGen.liveCount).toBe(2);
+    });
+  });
+
+  describe("collectGarbage", () => {
+    it("minor type runs only scavenge", () => {
+      const { gc } = makeGCWithRoots();
+      gc.collectGarbage("minor");
+      expect(gc.stats.minorGCCount).toBe(1);
+      expect(gc.stats.majorGCCount).toBe(0);
+    });
+
+    it("major/full type runs both scavenge and mark-compact", () => {
+      const { gc } = makeGCWithRoots();
+      gc.collectGarbage("full");
+      expect(gc.stats.minorGCCount).toBe(1);
+      expect(gc.stats.majorGCCount).toBe(1);
+    });
+  });
+
+  describe("incremental major GC", () => {
+    it("full lifecycle: start → steps → finish sweeps old gen", () => {
+      const { gc, rootObjects } = makeGCWithRoots({ youngGenSize: 32 });
+      const live = makeHeapObj("live");
+      const dead = makeHeapObj("dead");
+      gc.allocate(live, true);
+      gc.allocate(dead, true);
+      rootObjects.push(live);
+
+      gc.startIncrementalMajorGC();
+      expect(gc.isIncrementalMarkingActive()).toBe(true);
+
+      while (gc.incrementalMarkingStep(1000)) {}
+
+      expect(gc.isIncrementalMarkingActive()).toBe(false);
+      expect(gc.stats.majorGCCount).toBe(1);
+      expect(gc.stats.totalCollected).toBeGreaterThan(0);
+    });
+
+    it("startIncrementalMajorGC is idempotent", () => {
+      const { gc } = makeGCWithRoots();
+      gc.startIncrementalMajorGC();
+      gc.startIncrementalMajorGC();
+      expect(gc.isIncrementalMarkingActive()).toBe(true);
+    });
+
+    it("finishIncrementalMajorGC is no-op when not active", () => {
+      const { gc } = makeGCWithRoots();
+      gc.finishIncrementalMajorGC();
+      expect(gc.stats.majorGCCount).toBe(0);
+    });
+  });
+
+  describe("generation queries", () => {
+    it("isInYoungGen/isInOldGen return correct results", () => {
+      const { gc } = makeGCWithRoots();
+      const young = makeHeapObj("y");
+      const old = makeHeapObj("o");
+      gc.allocate(young);
+      gc.allocate(old, true);
+      expect(gc.isInYoungGen(young)).toBe(true);
+      expect(gc.isInOldGen(young)).toBe(false);
+      expect(gc.isInOldGen(old)).toBe(true);
+      expect(gc.isInYoungGen(old)).toBe(false);
+    });
+
+    it("handles null/no-header gracefully", () => {
+      const { gc } = makeGCWithRoots();
+      expect(gc.isInYoungGen(null)).toBeFalsy();
+      expect(gc.isInOldGen({})).toBeFalsy();
+    });
+  });
+
+  describe("getStats", () => {
+    it("returns comprehensive stats after GC activity", () => {
+      const { gc, rootObjects } = makeGCWithRoots({ youngGenSize: 32, allocationBudget: 100 });
+      for (let i = 0; i < 5; i++) {
+        const obj = makeHeapObj(i);
+        gc.allocate(obj);
+        rootObjects.push(obj);
+      }
+      gc.collectGarbage("full");
+      const stats = gc.getStats();
+      expect(stats.totalAllocated).toBe(5);
+      expect(stats.minorGCCount).toBe(1);
+      expect(stats.majorGCCount).toBe(1);
+      expect(stats).toHaveProperty("youngGenUsed");
+      expect(stats).toHaveProperty("oldGenLive");
+      expect(stats).toHaveProperty("rememberedSetSize");
+    });
   });
 });

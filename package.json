@@ -6,8 +6,17 @@
   "main": "src/index.js",
   "scripts": {
     "start": "node src/cli/index.js",
-    "test": "node --test tests/",
-    "bench": "node bench/run.js"
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
-  "license": "MIT"
+  "devDependencies": {
+    "@vitest/coverage-v8": "^3.2.4",
+    "vitest": "^3.2.4"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "cli-highlight": "^2.1.11",
+    "terminal-kit": "^3.1.2"
+  }
 }

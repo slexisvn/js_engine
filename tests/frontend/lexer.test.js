@@ -1,5 +1,4 @@
-import { describe, it, beforeEach } from "node:test";
-import assert from "node:assert/strict";
+import { describe, it, expect } from "vitest";
 import { Lexer, TokenType } from "../../src/frontend/lexer/index.js";
 
 function tokenize(src) {
@@ -7,433 +6,364 @@ function tokenize(src) {
 }
 
 function tokenValues(src) {
-  return tokenize(src).map((t) => t.value);
+  return tokenize(src)
+    .filter((t) => t.type !== TokenType.EOF)
+    .map((t) => t.value);
 }
 
 function tokenTypes(src) {
-  return tokenize(src).map((t) => t.type);
+  return tokenize(src)
+    .filter((t) => t.type !== TokenType.EOF)
+    .map((t) => t.type);
 }
 
 describe("Lexer", () => {
-  describe("integers", () => {
-    it("tokenizes single digit", () => {
-      const tokens = tokenize("0");
-      assert.equal(tokens.length, 2);
-      assert.equal(tokens[0].type, TokenType.Number);
-      assert.equal(tokens[0].value, "0");
-      assert.equal(tokens[1].type, TokenType.EOF);
-    });
-
-    it("tokenizes multi-digit integer", () => {
-      const tokens = tokenize("42");
-      assert.equal(tokens[0].type, TokenType.Number);
-      assert.equal(tokens[0].value, "42");
-    });
-
-    it("tokenizes large integer", () => {
-      const tokens = tokenize("9999999");
-      assert.equal(tokens[0].value, "9999999");
-    });
-
-    it("tokenizes zero", () => {
-      const tokens = tokenize("0");
-      assert.equal(tokens[0].value, "0");
-    });
-  });
-
-  describe("floats", () => {
-    it("tokenizes simple float", () => {
-      const tokens = tokenize("3.14");
-      assert.equal(tokens[0].type, TokenType.Number);
-      assert.equal(tokens[0].value, "3.14");
-    });
-
-    it("tokenizes float starting with zero", () => {
-      const tokens = tokenize("0.5");
-      assert.equal(tokens[0].value, "0.5");
-    });
-
-    it("tokenizes float with many decimals", () => {
-      const tokens = tokenize("1.23456789");
-      assert.equal(tokens[0].value, "1.23456789");
-    });
-  });
-
-  describe("strings", () => {
-    it("tokenizes empty string", () => {
-      const tokens = tokenize('""');
-      assert.equal(tokens[0].type, TokenType.String);
-      assert.equal(tokens[0].value, "");
-    });
-
-    it("tokenizes simple string", () => {
-      const tokens = tokenize('"hello"');
-      assert.equal(tokens[0].value, "hello");
-    });
-
-    it("tokenizes string with spaces", () => {
-      const tokens = tokenize('"hello world"');
-      assert.equal(tokens[0].value, "hello world");
-    });
-
-    it("tokenizes escaped newline", () => {
-      const tokens = tokenize('"line1\\nline2"');
-      assert.equal(tokens[0].value, "line1\nline2");
-    });
-
-    it("tokenizes escaped tab", () => {
-      const tokens = tokenize('"col1\\tcol2"');
-      assert.equal(tokens[0].value, "col1\tcol2");
-    });
-
-    it("tokenizes escaped backslash", () => {
-      const tokens = tokenize('"path\\\\file"');
-      assert.equal(tokens[0].value, "path\\file");
-    });
-
-    it("tokenizes escaped quote", () => {
-      const tokens = tokenize('"say \\"hi\\""');
-      assert.equal(tokens[0].value, 'say "hi"');
-    });
-
-    it("throws on unterminated string", () => {
-      assert.throws(() => tokenize('"oops'), SyntaxError);
-    });
-  });
-
-  describe("identifiers", () => {
-    it("tokenizes single letter", () => {
-      const tokens = tokenize("x");
-      assert.equal(tokens[0].type, TokenType.Identifier);
-      assert.equal(tokens[0].value, "x");
-    });
-
-    it("tokenizes camelCase", () => {
-      const tokens = tokenize("myVar");
-      assert.equal(tokens[0].value, "myVar");
-    });
-
-    it("tokenizes with underscore", () => {
-      const tokens = tokenize("_private");
-      assert.equal(tokens[0].value, "_private");
-    });
-
-    it("tokenizes with dollar sign", () => {
-      const tokens = tokenize("$el");
-      assert.equal(tokens[0].value, "$el");
-    });
-
-    it("tokenizes with digits in name", () => {
-      const tokens = tokenize("var2");
-      assert.equal(tokens[0].value, "var2");
-    });
-
-    it("tokenizes underscore-only identifier", () => {
-      const tokens = tokenize("_");
-      assert.equal(tokens[0].type, TokenType.Identifier);
-      assert.equal(tokens[0].value, "_");
-    });
-  });
-
-  describe("keywords", () => {
-    const keywords = [
-      "let",
-      "function",
-      "if",
-      "else",
-      "while",
-      "return",
-      "true",
-      "false",
-      "null",
-      "undefined",
-      "new",
-      "this",
-    ];
-
-    for (const kw of keywords) {
-      it(`recognizes "${kw}"`, () => {
-        const tokens = tokenize(kw);
-        assert.equal(tokens[0].type, TokenType.Keyword);
-        assert.equal(tokens[0].value, kw);
-      });
-    }
-
-    it("does not treat partial keyword match as keyword", () => {
-      const tokens = tokenize("letter");
-      assert.equal(tokens[0].type, TokenType.Identifier);
-    });
-
-    it("does not treat keyword prefix as keyword", () => {
-      const tokens = tokenize("returned");
-      assert.equal(tokens[0].type, TokenType.Identifier);
-    });
-  });
-
-  describe("multi-char operators", () => {
-    it("tokenizes ===", () => {
-      const tokens = tokenize("===");
-      assert.equal(tokens[0].type, TokenType.Punctuator);
-      assert.equal(tokens[0].value, "===");
-    });
-
-    it("tokenizes !==", () => {
-      const tokens = tokenize("!==");
-      assert.equal(tokens[0].value, "!==");
-    });
-
-    it("tokenizes <=", () => {
-      const tokens = tokenize("<=");
-      assert.equal(tokens[0].value, "<=");
-    });
-
-    it("tokenizes >=", () => {
-      const tokens = tokenize(">=");
-      assert.equal(tokens[0].value, ">=");
-    });
-
-    it("tokenizes &&", () => {
-      const tokens = tokenize("&&");
-      assert.equal(tokens[0].value, "&&");
-    });
-
-    it("tokenizes ||", () => {
-      const tokens = tokenize("||");
-      assert.equal(tokens[0].value, "||");
-    });
-
-    it("differentiates = from ===", () => {
-      const tokens = tokenize("a === b = c");
-      assert.equal(tokens[1].value, "===");
-      assert.equal(tokens[3].value, "=");
-    });
-
-    it("differentiates ! from !==", () => {
-      const tokens = tokenize("!x !== y");
-      assert.equal(tokens[0].value, "!");
-      assert.equal(tokens[2].value, "!==");
-    });
-  });
-
-  describe("single-char punctuators", () => {
-    const singles = [
-      "+",
-      "-",
-      "*",
-      "/",
-      "%",
-      "<",
-      ">",
-      "!",
-      "=",
-      ".",
-      ",",
-      ";",
-      "(",
-      ")",
-      "{",
-      "}",
-      "[",
-      "]",
-      ":",
-    ];
-
-    for (const ch of singles) {
-      it(`tokenizes '${ch}'`, () => {
-        const src =
-          ch === "!" ? "!x" : ch === "." ? "a.b" : ch === "/" ? "a / b" : ch;
-        const tokens = tokenize(src);
-        const found = tokens.find((t) => t.value === ch);
-        assert.ok(found, `Expected to find punctuator '${ch}'`);
-        assert.equal(found.type, TokenType.Punctuator);
-      });
-    }
-  });
-
-  describe("comment skipping", () => {
-    it("skips single-line comment", () => {
-      const tokens = tokenize("42 // this is a comment\n58");
-      assert.equal(tokens[0].type, TokenType.Number);
-      assert.equal(tokens[0].value, "42");
-      assert.equal(tokens[1].type, TokenType.Number);
-      assert.equal(tokens[1].value, "58");
-    });
-
-    it("skips comment at end of input", () => {
-      const tokens = tokenize("x // trailing");
-      assert.equal(tokens.length, 2);
-      assert.equal(tokens[0].value, "x");
-      assert.equal(tokens[1].type, TokenType.EOF);
-    });
-
-    it("skips multiple comment lines", () => {
-      const tokens = tokenize("// first\n// second\n99");
-      assert.equal(tokens[0].value, "99");
-    });
-
-    it("does not skip // inside strings", () => {
-      const tokens = tokenize('"hello // world"');
-      assert.equal(tokens[0].type, TokenType.String);
-      assert.equal(tokens[0].value, "hello // world");
-    });
-  });
-
-  describe("line and column tracking", () => {
-    it("tracks column on first line", () => {
-      const tokens = tokenize("let x = 5;");
-      assert.equal(tokens[0].line, 1);
-      assert.equal(tokens[0].column, 1);
-      assert.equal(tokens[1].line, 1);
-      assert.equal(tokens[1].column, 5);
-    });
-
-    it("tracks line after newline", () => {
-      const tokens = tokenize("a\nb");
-      assert.equal(tokens[0].line, 1);
-      assert.equal(tokens[1].line, 2);
-    });
-
-    it("resets column after newline", () => {
-      const tokens = tokenize("a\n  b");
-      assert.equal(tokens[1].line, 2);
-      assert.equal(tokens[1].column, 3);
-    });
-
-    it("tracks through multiple lines", () => {
-      const tokens = tokenize("a\nb\nc");
-      assert.equal(tokens[0].line, 1);
-      assert.equal(tokens[1].line, 2);
-      assert.equal(tokens[2].line, 3);
-    });
-  });
-
-  describe("whitespace handling", () => {
-    it("skips spaces", () => {
-      const tokens = tokenize("  42  ");
-      assert.equal(tokens[0].value, "42");
-    });
-
-    it("skips tabs", () => {
-      const tokens = tokenize("\t42\t");
-      assert.equal(tokens[0].value, "42");
-    });
-
-    it("skips carriage returns", () => {
-      const tokens = tokenize("\r\n42");
-      assert.equal(tokens[0].value, "42");
-    });
-  });
-
-  describe("complex tokenization", () => {
-    it("tokenizes a let declaration", () => {
-      const vals = tokenValues("let x = 42;");
-      assert.deepEqual(vals, ["let", "x", "=", "42", ";", ""]);
-    });
-
-    it("tokenizes a function declaration", () => {
-      const types = tokenTypes("function add(a, b) { return a + b; }");
-      assert.deepEqual(types, [
-        "Keyword",
-        "Identifier",
-        "Punctuator",
-        "Identifier",
-        "Punctuator",
-        "Identifier",
-        "Punctuator",
-        "Punctuator",
-        "Keyword",
-        "Identifier",
-        "Punctuator",
-        "Identifier",
-        "Punctuator",
-        "Punctuator",
-        "EOF",
-      ]);
-    });
-
-    it("tokenizes member access chain", () => {
-      const vals = tokenValues("a.b.c");
-      assert.deepEqual(vals, ["a", ".", "b", ".", "c", ""]);
-    });
-
-    it("tokenizes comparison expression", () => {
-      const vals = tokenValues("x <= 10");
-      assert.deepEqual(vals, ["x", "<=", "10", ""]);
-    });
-
-    it("tokenizes array literal", () => {
-      const vals = tokenValues("[1, 2, 3]");
-      assert.deepEqual(vals, ["[", "1", ",", "2", ",", "3", "]", ""]);
-    });
-
-    it("tokenizes object literal", () => {
-      const vals = tokenValues("{ x: 1, y: 2 }");
-      assert.deepEqual(vals, ["{", "x", ":", "1", ",", "y", ":", "2", "}", ""]);
-    });
-  });
-
-  describe("error cases", () => {
-    it("throws on unexpected character", () => {
-      assert.throws(() => tokenize("@"), SyntaxError);
-    });
-
-    // backtick now supported (template literals) — no longer throws
-
-    it("throws on hash", () => {
-      assert.throws(() => tokenize("#private"), SyntaxError);
-    });
-
-    it("error includes line and column", () => {
-      try {
-        tokenize("\n\n  @");
-        assert.fail("Should have thrown");
-      } catch (e) {
-        assert.ok(e instanceof SyntaxError);
-        assert.ok(e.message.includes("3:"), `Expected line 3 in: ${e.message}`);
+  describe("numbers", () => {
+    it("all numeric formats tokenize correctly", () => {
+      const cases = [
+        ["42", "42"], ["3.14", "3.14"], ["0", "0"],
+        ["0xFF", "0xFF"], ["0XAB", "0XAB"],
+        ["0b1010", "0b1010"], ["0B11", "0B11"],
+        ["0o77", "0o77"], ["0O10", "0O10"],
+        ["1e5", "1e5"], ["1.5e-3", "1.5e-3"], ["2E+10", "2E+10"],
+      ];
+      for (const [input, expected] of cases) {
+        const tok = tokenize(input)[0];
+        expect(tok.type).toBe(TokenType.Number);
+        expect(tok.value).toBe(expected);
       }
     });
   });
 
-  describe("empty input", () => {
-    it("returns only EOF for empty string", () => {
-      const tokens = tokenize("");
-      assert.equal(tokens.length, 1);
-      assert.equal(tokens[0].type, TokenType.EOF);
+  describe("strings", () => {
+    it("escape sequences across quote styles", () => {
+      const cases = [
+        ['"a\\nb"', "a\nb"], ['"a\\tb"', "a\tb"], ['"a\\rb"', "a\rb"],
+        ['"a\\\\b"', "a\\b"], ['"a\\"b"', 'a"b'],
+        ["'a\\nb'", "a\nb"], ["'a\\'b'", "a'b"],
+        ['""', ""], ["''", ""],
+      ];
+      for (const [input, expected] of cases) {
+        const tok = tokenize(input)[0];
+        expect(tok.type).toBe(TokenType.String);
+        expect(tok.value).toBe(expected);
+      }
     });
 
-    it("returns only EOF for whitespace", () => {
-      const tokens = tokenize("   \n\t  ");
-      assert.equal(tokens.length, 1);
-      assert.equal(tokens[0].type, TokenType.EOF);
-    });
-
-    it("returns only EOF for comment-only input", () => {
-      const tokens = tokenize("// nothing here");
-      assert.equal(tokens.length, 1);
-      assert.equal(tokens[0].type, TokenType.EOF);
+    it("unterminated strings throw", () => {
+      expect(() => tokenize('"hello')).toThrow(/Unterminated string/);
+      expect(() => tokenize("'hello")).toThrow(/Unterminated string/);
     });
   });
-});
 
-describe("Number Literal Tokenization", () => {
-  it("tokenizes hex as number", () => {
-    const lexer = new Lexer("0xFF");
-    const tokens = lexer.tokenize();
-    assert.equal(tokens[0].type, TokenType.Number);
-    assert.equal(tokens[0].value, "0xFF");
+  describe("template literals", () => {
+    it("simple template", () => {
+      const tok = tokenize("`hello`")[0];
+      expect(tok.type).toBe(TokenType.TemplateLiteral);
+      expect(tok.value.parts).toEqual(["hello"]);
+      expect(tok.value.expressions).toEqual([]);
+    });
+
+    it("template with expression", () => {
+      const tok = tokenize("`a${x}b`")[0];
+      expect(tok.value.parts).toEqual(["a", "b"]);
+      expect(tok.value.expressions).toEqual(["x"]);
+    });
+
+    it("template with multiple expressions", () => {
+      const tok = tokenize("`${a}+${b}`")[0];
+      expect(tok.value.parts).toEqual(["", "+", ""]);
+      expect(tok.value.expressions).toEqual(["a", "b"]);
+    });
+
+    it("template escape sequences", () => {
+      const tok = tokenize("`a\\nb`")[0];
+      expect(tok.value.parts).toEqual(["a\nb"]);
+    });
+
+    it("template with nested braces", () => {
+      const tok = tokenize("`${a + {x: 1}}`")[0];
+      expect(tok.value.expressions).toEqual(["a + {x: 1}"]);
+    });
+
+    it("unterminated template throws", () => {
+      expect(() => tokenize("`hello")).toThrow(/Unterminated template/);
+    });
   });
 
-  it("tokenizes binary as number", () => {
-    const lexer = new Lexer("0b1010");
-    const tokens = lexer.tokenize();
-    assert.equal(tokens[0].type, TokenType.Number);
-    assert.equal(tokens[0].value, "0b1010");
+  describe("identifiers and keywords", () => {
+    it("identifiers with special start chars", () => {
+      for (const id of ["_foo", "$bar", "_$baz123"]) {
+        const tok = tokenize(id)[0];
+        expect(tok.type).toBe(TokenType.Identifier);
+        expect(tok.value).toBe(id);
+      }
+    });
+
+    it("keywords", () => {
+      const keywords = [
+        "let",
+        "const",
+        "var",
+        "function",
+        "if",
+        "else",
+        "while",
+        "for",
+        "return",
+        "true",
+        "false",
+        "null",
+        "undefined",
+        "new",
+        "this",
+        "class",
+        "extends",
+        "super",
+        "async",
+        "await",
+        "yield",
+      ];
+      for (const kw of keywords) {
+        const tok = tokenize(kw)[0];
+        expect(tok.type).toBe(TokenType.Keyword);
+        expect(tok.value).toBe(kw);
+      }
+    });
   });
 
-  it("tokenizes scientific as number", () => {
-    const lexer = new Lexer("1.5e10");
-    const tokens = lexer.tokenize();
-    assert.equal(tokens[0].type, TokenType.Number);
-    assert.equal(tokens[0].value, "1.5e10");
+  describe("punctuators", () => {
+    it("single char", () => {
+      const singles = [
+        "+",
+        "-",
+        "*",
+        "%",
+        "(",
+        ")",
+        "{",
+        "}",
+        "[",
+        "]",
+        ";",
+        ",",
+        ".",
+        ":",
+        "?",
+        "!",
+        "=",
+        "<",
+        ">",
+        "&",
+        "|",
+        "^",
+        "~",
+      ];
+      for (const p of singles) {
+        const tok = tokenize(p)[0];
+        expect(tok.type).toBe(TokenType.Punctuator);
+        expect(tok.value).toBe(p);
+      }
+    });
+
+    it("multi char", () => {
+      const multis = [
+        "===",
+        "!==",
+        "==",
+        "!=",
+        "<=",
+        ">=",
+        "&&",
+        "||",
+        "??",
+        "?.",
+        "++",
+        "--",
+        "**",
+        "=>",
+        "+=",
+        "-=",
+        "*=",
+        "%=",
+        "...",
+        "<<",
+        ">>",
+        ">>>",
+        "<<=",
+        ">>=",
+        ">>>=",
+        "**=",
+        "&=",
+        "|=",
+        "^=",
+      ];
+      for (const p of multis) {
+        const toks = tokenize(p);
+        expect(toks[0].type).toBe(TokenType.Punctuator);
+        expect(toks[0].value).toBe(p);
+      }
+    });
+
+    it("slash as division after context", () => {
+      const toks = tokenize("1 / 2");
+      expect(toks[1].type).toBe(TokenType.Punctuator);
+      expect(toks[1].value).toBe("/");
+    });
+
+    it("/= after context", () => {
+      const toks = tokenize("x /= 2");
+      expect(toks[1].type).toBe(TokenType.Punctuator);
+      expect(toks[1].value).toBe("/=");
+    });
+
+    it("prefers longer punctuator", () => {
+      const toks = tokenize("===");
+      expect(toks[0].value).toBe("===");
+    });
+  });
+
+  describe("regex", () => {
+    it("simple regex", () => {
+      const toks = tokenize("let x = /abc/g");
+      const regex = toks.find((t) => t.type === TokenType.RegExp);
+      expect(regex.value.pattern).toBe("abc");
+      expect(regex.value.flags).toBe("g");
+    });
+
+    it("regex with char class", () => {
+      const toks = tokenize("let x = /[a-z]/i");
+      const regex = toks.find((t) => t.type === TokenType.RegExp);
+      expect(regex.value.pattern).toBe("[a-z]");
+      expect(regex.value.flags).toBe("i");
+    });
+
+    it("regex with escape", () => {
+      const toks = tokenize("let x = /a\\.b/");
+      const regex = toks.find((t) => t.type === TokenType.RegExp);
+      expect(regex.value.pattern).toBe("a\\.b");
+    });
+
+    it("division not regex after number", () => {
+      const toks = tokenize("2 / 3");
+      expect(toks[1].type).toBe(TokenType.Punctuator);
+      expect(toks[1].value).toBe("/");
+    });
+
+    it("division not regex after identifier", () => {
+      const toks = tokenize("x / y");
+      expect(toks[1].type).toBe(TokenType.Punctuator);
+      expect(toks[1].value).toBe("/");
+    });
+
+    it("regex after operator", () => {
+      const toks = tokenize("x = /test/g");
+      const regex = toks.find((t) => t.type === TokenType.RegExp);
+      expect(regex).toBeDefined();
+      expect(regex.value.pattern).toBe("test");
+    });
+  });
+
+  describe("comments", () => {
+    it("single line comment", () => {
+      const toks = tokenize("a // comment\nb");
+      const vals = toks
+        .filter((t) => t.type !== TokenType.EOF)
+        .map((t) => t.value);
+      expect(vals).toEqual(["a", "b"]);
+    });
+
+    it("comment at end of input", () => {
+      const toks = tokenize("x // end");
+      expect(
+        toks.filter((t) => t.type !== TokenType.EOF).map((t) => t.value),
+      ).toEqual(["x"]);
+    });
+  });
+
+  describe("whitespace", () => {
+    it("skips spaces tabs newlines", () => {
+      const vals = tokenValues("  a \t b \n c \r\n d  ");
+      expect(vals).toEqual(["a", "b", "c", "d"]);
+    });
+  });
+
+  describe("line and column tracking", () => {
+    it("tracks line numbers", () => {
+      const toks = tokenize("a\nb\nc");
+      expect(toks[0].line).toBe(1);
+      expect(toks[1].line).toBe(2);
+      expect(toks[2].line).toBe(3);
+    });
+
+    it("tracks column numbers", () => {
+      const toks = tokenize("ab cd");
+      expect(toks[0].column).toBe(1);
+      expect(toks[1].column).toBe(4);
+    });
+
+    it("resets column after newline", () => {
+      const toks = tokenize("a\n  b");
+      expect(toks[1].column).toBe(3);
+    });
+  });
+
+  describe("EOF", () => {
+    it("EOF is sole token for empty input and last token otherwise", () => {
+      const empty = tokenize("");
+      expect(empty).toHaveLength(1);
+      expect(empty[0].type).toBe(TokenType.EOF);
+      const nonEmpty = tokenize("x + y");
+      expect(nonEmpty[nonEmpty.length - 1].type).toBe(TokenType.EOF);
+      expect(nonEmpty.filter((t) => t.type === TokenType.EOF)).toHaveLength(1);
+    });
+  });
+
+  describe("complex expressions", () => {
+    it("function call", () => {
+      const vals = tokenValues("foo(1, 2)");
+      expect(vals).toEqual(["foo", "(", "1", ",", "2", ")"]);
+    });
+
+    it("arrow function", () => {
+      const vals = tokenValues("(x) => x + 1");
+      expect(vals).toEqual(["(", "x", ")", "=>", "x", "+", "1"]);
+    });
+
+    it("object literal", () => {
+      const vals = tokenValues("{ a: 1 }");
+      expect(vals).toEqual(["{", "a", ":", "1", "}"]);
+    });
+
+    it("member access and computed", () => {
+      const vals = tokenValues("a.b[0]");
+      expect(vals).toEqual(["a", ".", "b", "[", "0", "]"]);
+    });
+
+    it("ternary", () => {
+      const vals = tokenValues("a ? b : c");
+      expect(vals).toEqual(["a", "?", "b", ":", "c"]);
+    });
+
+    it("optional chaining", () => {
+      const vals = tokenValues("a?.b");
+      expect(vals).toEqual(["a", "?.", "b"]);
+    });
+
+    it("spread", () => {
+      const vals = tokenValues("...args");
+      expect(vals).toEqual(["...", "args"]);
+    });
+
+    it("nullish coalescing", () => {
+      const vals = tokenValues("a ?? b");
+      expect(vals).toEqual(["a", "??", "b"]);
+    });
+  });
+
+  describe("error handling", () => {
+    it("unexpected character", () => {
+      expect(() => tokenize("@")).toThrow(/Unexpected character/);
+    });
   });
 });

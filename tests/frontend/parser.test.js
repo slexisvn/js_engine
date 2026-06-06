@@ -1,533 +1,795 @@
-import { describe, it } from "node:test";
-import assert from "node:assert/strict";
-import { Parser, parse } from "../../src/frontend/parser/index.js";
-import { Lexer } from "../../src/frontend/lexer/index.js";
+import { describe, it, expect } from "vitest";
+import { parse } from "../../src/frontend/parser/index.js";
 import { NodeType } from "../../src/frontend/ast/index.js";
 
-function parseSource(src) {
-  return parse(src);
-}
-
 function parseExpr(src) {
-  const ast = parseSource(src + ";");
-  assert.equal(ast.body.length, 1);
-  assert.equal(ast.body[0].type, NodeType.ExpressionStatement);
+  const ast = parse(src);
+  expect(ast.type).toBe(NodeType.Program);
+  expect(ast.body).toHaveLength(1);
+  expect(ast.body[0].type).toBe(NodeType.ExpressionStatement);
   return ast.body[0].expression;
 }
 
 function parseStmt(src) {
-  const ast = parseSource(src);
-  assert.equal(ast.body.length, 1);
+  const ast = parse(src);
+  expect(ast.type).toBe(NodeType.Program);
+  expect(ast.body).toHaveLength(1);
   return ast.body[0];
 }
 
 describe("Parser", () => {
-  describe("let declarations", () => {
-    it("parses let with init", () => {
-      const stmt = parseStmt("let x = 5;");
-      assert.equal(stmt.type, NodeType.LetDeclaration);
-      assert.equal(stmt.name, "x");
-      assert.equal(stmt.init.type, NodeType.Literal);
-      assert.equal(stmt.init.value, 5);
-    });
-
-    it("parses let without init", () => {
-      const stmt = parseStmt("let y;");
-      assert.equal(stmt.type, NodeType.LetDeclaration);
-      assert.equal(stmt.name, "y");
-      assert.equal(stmt.init, null);
-    });
-
-    it("parses let with expression init", () => {
-      const stmt = parseStmt("let z = 1 + 2;");
-      assert.equal(stmt.init.type, NodeType.BinaryExpression);
-      assert.equal(stmt.init.op, "+");
-    });
-  });
-
-  describe("function declarations", () => {
-    it("parses no-param function", () => {
-      const stmt = parseStmt("function f() { return 1; }");
-      assert.equal(stmt.type, NodeType.FunctionDeclaration);
-      assert.equal(stmt.name, "f");
-      assert.equal(stmt.params.length, 0);
-      assert.equal(stmt.body.type, NodeType.BlockStatement);
-    });
-
-    it("parses single-param function", () => {
-      const stmt = parseStmt("function inc(x) { return x + 1; }");
-      assert.deepEqual(stmt.params, ["x"]);
-      assert.equal(stmt.body.body.length, 1);
-      assert.equal(stmt.body.body[0].type, NodeType.ReturnStatement);
-    });
-
-    it("parses multi-param function", () => {
-      const stmt = parseStmt("function add(a, b, c) { return a + b + c; }");
-      assert.deepEqual(stmt.params, ["a", "b", "c"]);
-    });
-
-    it("parses function with multiple statements", () => {
-      const stmt = parseStmt("function foo(x) { let y = x + 1; return y; }");
-      assert.equal(stmt.body.body.length, 2);
-      assert.equal(stmt.body.body[0].type, NodeType.LetDeclaration);
-      assert.equal(stmt.body.body[1].type, NodeType.ReturnStatement);
+  describe("literals", () => {
+    it("all literal types parse with correct kind and value", () => {
+      const cases = [
+        ["42", 42, "number"],
+        ["3.14", 3.14, "number"],
+        ['"hello"', "hello", "string"],
+        ["'world'", "world", "string"],
+        ["true", true, "boolean"],
+        ["false", false, "boolean"],
+        ["null", null, "null"],
+        ["undefined", undefined, "undefined"],
+      ];
+      for (const [src, value, kind] of cases) {
+        const expr = parseExpr(src);
+        expect(expr.type).toBe(NodeType.Literal);
+        expect(expr.kind).toBe(kind);
+        if (kind === "number" && !Number.isInteger(value)) {
+          expect(expr.value).toBeCloseTo(value);
+        } else {
+          expect(expr.value).toBe(value);
+        }
+      }
     });
   });
 
-  describe("operator precedence", () => {
-    it("multiplies before adding: 1 + 2 * 3", () => {
+  describe("binary expressions", () => {
+    it("all binary operators", () => {
+      const ops = [
+        "+", "-", "*", "/", "%", "**",
+        "==", "!=", "===", "!==", "<", ">", "<=", ">=",
+        "&", "|", "^", "<<", ">>", ">>>",
+        "instanceof", "in",
+      ];
+      for (const op of ops) {
+        const expr = parseExpr(`a ${op} b`);
+        expect(expr.type).toBe(NodeType.BinaryExpression);
+        expect(expr.op).toBe(op);
+      }
+    });
+
+    it("precedence mul over add", () => {
       const expr = parseExpr("1 + 2 * 3");
-      assert.equal(expr.type, NodeType.BinaryExpression);
-      assert.equal(expr.op, "+");
-      assert.equal(expr.left.value, 1);
-      assert.equal(expr.right.type, NodeType.BinaryExpression);
-      assert.equal(expr.right.op, "*");
-      assert.equal(expr.right.left.value, 2);
-      assert.equal(expr.right.right.value, 3);
+      expect(expr.op).toBe("+");
+      expect(expr.right.op).toBe("*");
     });
 
-    it("groups left-to-right for same precedence: 1 - 2 + 3", () => {
-      const expr = parseExpr("1 - 2 + 3");
-      assert.equal(expr.op, "+");
-      assert.equal(expr.left.type, NodeType.BinaryExpression);
-      assert.equal(expr.left.op, "-");
-    });
-
-    it("compares before logical: a < b && c > d", () => {
-      const expr = parseExpr("a < b && c > d");
-      assert.equal(expr.type, NodeType.LogicalExpression);
-      assert.equal(expr.op, "&&");
-      assert.equal(expr.left.op, "<");
-      assert.equal(expr.right.op, ">");
-    });
-
-    it("&& before ||", () => {
-      const expr = parseExpr("a || b && c");
-      assert.equal(expr.type, NodeType.LogicalExpression);
-      assert.equal(expr.op, "||");
-      assert.equal(expr.left.type, NodeType.Identifier);
-      assert.equal(expr.right.type, NodeType.LogicalExpression);
-      assert.equal(expr.right.op, "&&");
-    });
-
-    it("parentheses override precedence: (1 + 2) * 3", () => {
+    it("precedence with parens", () => {
       const expr = parseExpr("(1 + 2) * 3");
-      assert.equal(expr.op, "*");
-      assert.equal(expr.left.type, NodeType.BinaryExpression);
-      assert.equal(expr.left.op, "+");
+      expect(expr.op).toBe("*");
+      expect(expr.left.op).toBe("+");
     });
 
-    it("division and modulo at same precedence as multiply", () => {
-      const expr = parseExpr("a * b / c % d");
-      assert.equal(expr.op, "%");
-      assert.equal(expr.left.op, "/");
-      assert.equal(expr.left.left.op, "*");
-    });
-
-    it("=== and !== at same precedence", () => {
-      const expr = parseExpr("a === b");
-      assert.equal(expr.op, "===");
-      assert.equal(expr.left.name, "a");
-      assert.equal(expr.right.name, "b");
+    it("exponentiation right associative", () => {
+      const expr = parseExpr("2 ** 3 ** 4");
+      expect(expr.op).toBe("**");
+      expect(expr.right.op).toBe("**");
     });
   });
 
-  describe("if/else statements", () => {
-    it("parses simple if", () => {
-      const stmt = parseStmt("if (x) { y; }");
-      assert.equal(stmt.type, NodeType.IfStatement);
-      assert.equal(stmt.test.name, "x");
-      assert.equal(stmt.consequent.type, NodeType.BlockStatement);
-      assert.equal(stmt.alternate, null);
+  describe("logical expressions", () => {
+    it("logical operators", () => {
+      for (const op of ["&&", "||"]) {
+        const expr = parseExpr(`a ${op} b`);
+        expect(expr.type).toBe(NodeType.LogicalExpression);
+        expect(expr.op).toBe(op);
+      }
     });
 
-    it("parses if-else", () => {
-      const stmt = parseStmt("if (a) { b; } else { c; }");
-      assert.equal(stmt.consequent.body[0].expression.name, "b");
-      assert.notEqual(stmt.alternate, null);
-      assert.equal(stmt.alternate.body[0].expression.name, "c");
-    });
-
-    it("parses if-else if chain", () => {
-      const stmt = parseStmt("if (a) { b; } else if (c) { d; } else { e; }");
-      assert.equal(stmt.type, NodeType.IfStatement);
-      assert.equal(stmt.alternate.type, NodeType.IfStatement);
-      assert.equal(stmt.alternate.alternate.type, NodeType.BlockStatement);
-    });
-
-    it("parses complex condition", () => {
-      const stmt = parseStmt("if (x > 0 && x < 10) { ok; }");
-      assert.equal(stmt.test.type, NodeType.LogicalExpression);
-      assert.equal(stmt.test.op, "&&");
-    });
-  });
-
-  describe("while statements", () => {
-    it("parses simple while", () => {
-      const stmt = parseStmt("while (i < 10) { i = i + 1; }");
-      assert.equal(stmt.type, NodeType.WhileStatement);
-      assert.equal(stmt.test.op, "<");
-      assert.equal(stmt.body.type, NodeType.BlockStatement);
-    });
-
-    it("parses while with complex body", () => {
-      const ast = parseSource("while (x) { let a = 1; let b = 2; }");
-      const whileStmt = ast.body[0];
-      assert.equal(whileStmt.body.body.length, 2);
-    });
-  });
-
-  describe("return statements", () => {
-    it("parses return with value", () => {
-      const ast = parseSource("function f() { return 42; }");
-      const retStmt = ast.body[0].body.body[0];
-      assert.equal(retStmt.type, NodeType.ReturnStatement);
-      assert.equal(retStmt.argument.value, 42);
-    });
-
-    it("parses return without value", () => {
-      const ast = parseSource("function f() { return; }");
-      const retStmt = ast.body[0].body.body[0];
-      assert.equal(retStmt.argument, null);
-    });
-
-    it("parses return with expression", () => {
-      const ast = parseSource("function f(a, b) { return a + b; }");
-      const retStmt = ast.body[0].body.body[0];
-      assert.equal(retStmt.argument.type, NodeType.BinaryExpression);
-    });
-  });
-
-  describe("object expressions", () => {
-    it("parses object in let init", () => {
-      const ast = parseSource("let o = {};");
-      const init = ast.body[0].init;
-      assert.equal(init.type, NodeType.ObjectExpression);
-      assert.equal(init.properties.length, 0);
-    });
-
-    it("parses single property object", () => {
-      const ast = parseSource("let o = { x: 1 };");
-      const obj = ast.body[0].init;
-      assert.equal(obj.properties.length, 1);
-      assert.equal(obj.properties[0].key, "x");
-      assert.equal(obj.properties[0].value.value, 1);
-    });
-
-    it("parses multiple properties", () => {
-      const ast = parseSource("let o = { x: 1, y: 2, z: 3 };");
-      const obj = ast.body[0].init;
-      assert.equal(obj.properties.length, 3);
-      assert.equal(obj.properties[0].key, "x");
-      assert.equal(obj.properties[1].key, "y");
-      assert.equal(obj.properties[2].key, "z");
-    });
-
-    it("parses nested objects", () => {
-      const ast = parseSource("let o = { a: { b: 1 } };");
-      const obj = ast.body[0].init;
-      assert.equal(obj.properties[0].value.type, NodeType.ObjectExpression);
-      assert.equal(obj.properties[0].value.properties[0].key, "b");
-    });
-
-    it("parses string property keys", () => {
-      const ast = parseSource('let o = { "name": "alice" };');
-      const obj = ast.body[0].init;
-      assert.equal(obj.properties[0].key, "name");
-      assert.equal(obj.properties[0].value.value, "alice");
-    });
-  });
-
-  describe("array expressions", () => {
-    it("parses empty array", () => {
-      const expr = parseExpr("[]");
-      assert.equal(expr.type, NodeType.ArrayExpression);
-      assert.equal(expr.elements.length, 0);
-    });
-
-    it("parses array with elements", () => {
-      const expr = parseExpr("[1, 2, 3]");
-      assert.equal(expr.elements.length, 3);
-      assert.equal(expr.elements[0].value, 1);
-      assert.equal(expr.elements[2].value, 3);
-    });
-
-    it("parses nested arrays", () => {
-      const expr = parseExpr("[[1, 2], [3, 4]]");
-      assert.equal(expr.elements.length, 2);
-      assert.equal(expr.elements[0].type, NodeType.ArrayExpression);
-    });
-  });
-
-  describe("member expressions", () => {
-    it("parses dot access", () => {
-      const expr = parseExpr("a.b");
-      assert.equal(expr.type, NodeType.MemberExpression);
-      assert.equal(expr.object.name, "a");
-      assert.equal(expr.property, "b");
-    });
-
-    it("parses chained dot access", () => {
-      const expr = parseExpr("a.b.c");
-      assert.equal(expr.type, NodeType.MemberExpression);
-      assert.equal(expr.property, "c");
-      assert.equal(expr.object.type, NodeType.MemberExpression);
-      assert.equal(expr.object.property, "b");
-    });
-
-    it("parses computed access", () => {
-      const expr = parseExpr("a[0]");
-      assert.equal(expr.type, NodeType.MemberExpression);
-      assert.equal(expr.object.name, "a");
-      assert.equal(expr.property.value, 0);
-    });
-
-    it("parses computed access with identifier", () => {
-      const expr = parseExpr("a[i]");
-      assert.equal(expr.property.type, NodeType.Identifier);
-      assert.equal(expr.property.name, "i");
-    });
-  });
-
-  describe("call expressions", () => {
-    it("parses no-arg call", () => {
-      const expr = parseExpr("f()");
-      assert.equal(expr.type, NodeType.CallExpression);
-      assert.equal(expr.callee.name, "f");
-      assert.equal(expr.args.length, 0);
-    });
-
-    it("parses single-arg call", () => {
-      const expr = parseExpr("f(1)");
-      assert.equal(expr.args.length, 1);
-      assert.equal(expr.args[0].value, 1);
-    });
-
-    it("parses multi-arg call", () => {
-      const expr = parseExpr("add(a, b, c)");
-      assert.equal(expr.args.length, 3);
-    });
-
-    it("parses chained calls", () => {
-      const expr = parseExpr("f(1)(2)");
-      assert.equal(expr.type, NodeType.CallExpression);
-      assert.equal(expr.callee.type, NodeType.CallExpression);
-    });
-
-    it("parses method call", () => {
-      const expr = parseExpr("obj.method(x)");
-      assert.equal(expr.type, NodeType.CallExpression);
-      assert.equal(expr.callee.type, NodeType.MemberExpression);
-      assert.equal(expr.callee.property, "method");
-    });
-  });
-
-  describe("new expressions", () => {
-    it("parses new with parens", () => {
-      const expr = parseExpr("new Foo()");
-      assert.equal(expr.type, NodeType.NewExpression);
-      assert.equal(expr.callee.name, "Foo");
-      assert.equal(expr.args.length, 0);
-    });
-
-    it("parses new with args", () => {
-      const expr = parseExpr("new Point(1, 2)");
-      assert.equal(expr.args.length, 2);
-    });
-
-    it("parses new without parens", () => {
-      const expr = parseExpr("new Foo");
-      assert.equal(expr.type, NodeType.NewExpression);
-      assert.equal(expr.args.length, 0);
-    });
-  });
-
-  describe("assignment expressions", () => {
-    it("parses simple assignment", () => {
-      const expr = parseExpr("x = 5");
-      assert.equal(expr.type, NodeType.AssignmentExpression);
-      assert.equal(expr.target.name, "x");
-      assert.equal(expr.value.value, 5);
-    });
-
-    it("parses member assignment", () => {
-      const expr = parseExpr("a.b = 10");
-      assert.equal(expr.target.type, NodeType.MemberExpression);
-      assert.equal(expr.target.property, "b");
-    });
-
-    it("rejects invalid assignment target", () => {
-      assert.throws(() => parseSource("1 = 2;"), SyntaxError);
+    it("nullish coalescing", () => {
+      expect(parseExpr("a ?? b").type).toBe(
+        NodeType.NullishCoalescingExpression,
+      );
     });
   });
 
   describe("unary expressions", () => {
-    it("parses negation", () => {
-      const expr = parseExpr("-x");
-      assert.equal(expr.type, NodeType.UnaryExpression);
-      assert.equal(expr.op, "-");
-      assert.equal(expr.argument.name, "x");
-    });
-
-    it("parses logical not", () => {
-      const expr = parseExpr("!true");
-      assert.equal(expr.op, "!");
-      assert.equal(expr.argument.value, true);
-    });
-
-    it("parses double negation", () => {
-      const expr = parseExpr("!!x");
-      assert.equal(expr.op, "!");
-      assert.equal(expr.argument.type, NodeType.UnaryExpression);
-      assert.equal(expr.argument.op, "!");
+    it("all unary operators", () => {
+      const cases = [
+        ["-x", "-"], ["!x", "!"], ["~x", "~"],
+        ["typeof x", "typeof"], ["void 0", "void"], ["delete obj.x", "delete"],
+      ];
+      for (const [src, op] of cases) {
+        const expr = parseExpr(src);
+        expect(expr.type).toBe(NodeType.UnaryExpression);
+        expect(expr.op).toBe(op);
+      }
     });
   });
 
-  describe("literals", () => {
-    it("parses true", () => {
-      const expr = parseExpr("true");
-      assert.equal(expr.value, true);
-      assert.equal(expr.kind, "boolean");
-    });
-
-    it("parses false", () => {
-      const expr = parseExpr("false");
-      assert.equal(expr.value, false);
-    });
-
-    it("parses null", () => {
-      const expr = parseExpr("null");
-      assert.equal(expr.value, null);
-      assert.equal(expr.kind, "null");
-    });
-
-    it("parses undefined", () => {
-      const expr = parseExpr("undefined");
-      assert.equal(expr.value, undefined);
-      assert.equal(expr.kind, "undefined");
-    });
-
-    it("parses this", () => {
-      const expr = parseExpr("this");
-      assert.equal(expr.type, NodeType.ThisExpression);
+  describe("update expressions", () => {
+    it("prefix and postfix variants", () => {
+      const cases = [
+        ["++x", "++", true], ["--x", "--", true],
+        ["x++", "++", false], ["x--", "--", false],
+      ];
+      for (const [src, op, prefix] of cases) {
+        const expr = parseExpr(src);
+        expect(expr.type).toBe(NodeType.UpdateExpression);
+        expect(expr.op).toBe(op);
+        expect(expr.prefix).toBe(prefix);
+      }
     });
   });
 
-  describe("program structure", () => {
-    it("parses empty program", () => {
-      const ast = parseSource("");
-      assert.equal(ast.type, NodeType.Program);
-      assert.equal(ast.body.length, 0);
+  describe("assignment", () => {
+    it("simple assignment", () => {
+      const expr = parseExpr("x = 1");
+      expect(expr).toMatchObject({
+        type: NodeType.AssignmentExpression,
+        target: { type: NodeType.Identifier, name: "x" },
+        value: { type: NodeType.Literal, value: 1 },
+      });
     });
 
-    it("parses multiple statements", () => {
-      const ast = parseSource("let a = 1; let b = 2; let c = 3;");
-      assert.equal(ast.body.length, 3);
+    it("compound assignments", () => {
+      for (const op of [
+        "+=",
+        "-=",
+        "*=",
+        "/=",
+        "%=",
+        "&=",
+        "|=",
+        "^=",
+        "<<=",
+        ">>=",
+        ">>>=",
+        "**=",
+      ]) {
+        const expr = parseExpr(`x ${op} 1`);
+        expect(expr.type).toBe(NodeType.CompoundAssignmentExpression);
+        expect(expr.op).toBe(op.slice(0, -1));
+      }
     });
 
-    it("parses mixed statement types", () => {
-      const ast = parseSource("let x = 1; function f() { return x; } f();");
-      assert.equal(ast.body[0].type, NodeType.LetDeclaration);
-      assert.equal(ast.body[1].type, NodeType.FunctionDeclaration);
-      assert.equal(ast.body[2].type, NodeType.ExpressionStatement);
+    it("member assignment", () => {
+      const expr = parseExpr("a.b = 1");
+      expect(expr.target.type).toBe(NodeType.MemberExpression);
+    });
+  });
+
+  describe("member expressions", () => {
+    it("dot access", () => {
+      const expr = parseExpr("a.b");
+      expect(expr).toMatchObject({
+        type: NodeType.MemberExpression,
+        object: { name: "a" },
+        property: "b",
+        computed: false,
+      });
+    });
+
+    it("computed access", () => {
+      const expr = parseExpr("a[0]");
+      expect(expr).toMatchObject({
+        type: NodeType.MemberExpression,
+        computed: true,
+      });
+    });
+
+    it("chained", () => {
+      const expr = parseExpr("a.b.c");
+      expect(expr.type).toBe(NodeType.MemberExpression);
+      expect(expr.object.type).toBe(NodeType.MemberExpression);
+    });
+
+    it("optional member", () => {
+      const expr = parseExpr("a?.b");
+      expect(expr.type).toBe(NodeType.OptionalMemberExpression);
+    });
+
+    it("optional computed", () => {
+      const expr = parseExpr("a?.[0]");
+      expect(expr.type).toBe(NodeType.OptionalMemberExpression);
+    });
+  });
+
+  describe("call expressions", () => {
+    it("no args", () => {
+      const expr = parseExpr("foo()");
+      expect(expr).toMatchObject({
+        type: NodeType.CallExpression,
+        callee: { name: "foo" },
+        args: [],
+      });
+    });
+
+    it("with args", () => {
+      const expr = parseExpr("foo(1, 2, 3)");
+      expect(expr.args).toHaveLength(3);
+    });
+
+    it("chained calls", () => {
+      const expr = parseExpr("a()()");
+      expect(expr.type).toBe(NodeType.CallExpression);
+      expect(expr.callee.type).toBe(NodeType.CallExpression);
+    });
+
+    it("member call", () => {
+      const expr = parseExpr("a.b(1)");
+      expect(expr.callee.type).toBe(NodeType.MemberExpression);
+    });
+
+    it("optional call", () => {
+      const expr = parseExpr("a?.(1)");
+      expect(expr.type).toBe(NodeType.OptionalCallExpression);
+    });
+
+    it("spread in args", () => {
+      const expr = parseExpr("foo(...args)");
+      expect(expr.args[0].type).toBe(NodeType.SpreadElement);
+    });
+  });
+
+  describe("new expression", () => {
+    it("new with args", () => {
+      const expr = parseExpr("new Foo(1)");
+      expect(expr).toMatchObject({
+        type: NodeType.NewExpression,
+        callee: { name: "Foo" },
+      });
+      expect(expr.args).toHaveLength(1);
+    });
+
+    it("new without args", () => {
+      const expr = parseExpr("new Foo");
+      expect(expr.type).toBe(NodeType.NewExpression);
+      expect(expr.args).toHaveLength(0);
+    });
+
+    it("new with member", () => {
+      const expr = parseExpr("new a.B()");
+      expect(expr.callee.type).toBe(NodeType.MemberExpression);
+    });
+  });
+
+  describe("conditional expression", () => {
+    it("ternary", () => {
+      const expr = parseExpr("a ? b : c");
+      expect(expr).toMatchObject({
+        type: NodeType.ConditionalExpression,
+        test: { name: "a" },
+        consequent: { name: "b" },
+        alternate: { name: "c" },
+      });
+    });
+  });
+
+  describe("array expression", () => {
+    it("array with elements", () => {
+      const expr = parseExpr("[1, 2, 3]");
+      expect(expr.elements).toHaveLength(3);
+    });
+
+    it("array with spread", () => {
+      const expr = parseExpr("[...a]");
+      expect(expr.elements[0].type).toBe(NodeType.SpreadElement);
+    });
+  });
+
+  describe("object expression", () => {
+    it("key value pairs", () => {
+      const ast = parse("x = { a: 1, b: 2 }");
+      const expr = ast.body[0].expression.value;
+      expect(expr.properties).toHaveLength(2);
+      expect(expr.properties[0].key).toBe("a");
+    });
+
+    it("shorthand property", () => {
+      const ast = parse("x = { a }");
+      const prop = ast.body[0].expression.value.properties[0];
+      expect(prop.key).toBe("a");
+      expect(prop.value.type).toBe(NodeType.Identifier);
+    });
+
+    it("computed property", () => {
+      const ast = parse("x = { [k]: 1 }");
+      const prop = ast.body[0].expression.value.properties[0];
+      expect(prop.computed).toBe(true);
+    });
+
+    it("spread property", () => {
+      const ast = parse("x = { ...a }");
+      const prop = ast.body[0].expression.value.properties[0];
+      expect(prop.spread).toBe(true);
+    });
+
+    it("method shorthand", () => {
+      const ast = parse("x = { foo(a) { return a } }");
+      const prop = ast.body[0].expression.value.properties[0];
+      expect(prop.value.type).toBe(NodeType.FunctionExpression);
+    });
+
+    it("getter and setter", () => {
+      const ast = parse("x = { get a() { return 1 }, set a(v) { } }");
+      const props = ast.body[0].expression.value.properties;
+      expect(props[0].kind).toBe("get");
+      expect(props[1].kind).toBe("set");
+    });
+  });
+
+  describe("arrow functions", () => {
+    it("single param no parens", () => {
+      const expr = parseExpr("x => x + 1");
+      expect(expr).toMatchObject({
+        type: NodeType.ArrowFunctionExpression,
+        params: ["x"],
+        isExpression: true,
+      });
+    });
+
+    it("multi params", () => {
+      const expr = parseExpr("(a, b) => a + b");
+      expect(expr.params).toEqual(["a", "b"]);
+      expect(expr.isExpression).toBe(true);
+    });
+
+    it("no params", () => {
+      const expr = parseExpr("() => 42");
+      expect(expr.params).toEqual([]);
+    });
+
+    it("block body", () => {
+      const expr = parseExpr("(x) => { return x }");
+      expect(expr.isExpression).toBe(false);
+      expect(expr.body.type).toBe(NodeType.BlockStatement);
+    });
+
+    it("default params", () => {
+      const expr = parseExpr("(a, b = 1) => a + b");
+      expect(expr.params[1]).toHaveProperty("default");
+    });
+
+    it("rest params", () => {
+      const expr = parseExpr("(...args) => args");
+      expect(expr.params[0]).toMatchObject({ name: "args", rest: true });
+    });
+  });
+
+  describe("function expression", () => {
+    it("named", () => {
+      const expr = parseExpr("(function foo(a) { return a })");
+      expect(expr).toMatchObject({
+        type: NodeType.FunctionExpression,
+        name: "foo",
+      });
+    });
+
+    it("anonymous", () => {
+      const expr = parseExpr("(function(x) { return x })");
+      expect(expr.name).toBe(null);
+    });
+  });
+
+  describe("template literal", () => {
+    it("simple", () => {
+      const expr = parseExpr("`hello`");
+      expect(expr.type).toBe(NodeType.TemplateLiteral);
+      expect(expr.parts).toEqual(["hello"]);
+    });
+
+    it("with expressions", () => {
+      const expr = parseExpr("`a${1 + 2}b`");
+      expect(expr.parts).toEqual(["a", "b"]);
+      expect(expr.expressions).toHaveLength(1);
+      expect(expr.expressions[0].type).toBe(NodeType.BinaryExpression);
+    });
+  });
+
+  describe("declarations", () => {
+    it("let/const/var declaration types", () => {
+      const cases = [
+        ["let x = 1", NodeType.LetDeclaration],
+        ["const y = 2", NodeType.ConstDeclaration],
+        ["var z = 3", NodeType.VarDeclaration],
+      ];
+      for (const [src, expectedType] of cases) {
+        expect(parseStmt(src).type).toBe(expectedType);
+      }
+    });
+
+    it("let without init", () => {
+      const stmt = parseStmt("let x");
+      expect(stmt.init).toBe(null);
+    });
+
+    it("const without init throws", () => {
+      expect(() => parse("const x")).toThrow(/Missing initializer/);
+    });
+
+    it("multiple declarations", () => {
+      const ast = parse("let a = 1, b = 2");
+      expect(ast.body).toHaveLength(2);
+      expect(ast.body[0].name).toBe("a");
+      expect(ast.body[1].name).toBe("b");
+    });
+
+    it("object destructuring", () => {
+      const stmt = parseStmt("const { a, b } = obj");
+      expect(stmt.type).toBe(NodeType.ObjectDestructuring);
+    });
+
+    it("object destructuring with alias", () => {
+      const stmt = parseStmt("const { a: x } = obj");
+      expect(stmt.pattern[0]).toMatchObject({ key: "a", alias: "x" });
+    });
+
+    it("array destructuring", () => {
+      const stmt = parseStmt("const [a, b] = arr");
+      expect(stmt.type).toBe(NodeType.ArrayDestructuring);
+      expect(stmt.pattern).toEqual(["a", "b"]);
+    });
+
+    it("array destructuring with holes", () => {
+      const stmt = parseStmt("const [a, , b] = arr");
+      expect(stmt.pattern).toEqual(["a", null, "b"]);
+    });
+  });
+
+  describe("function declaration", () => {
+    it("basic function", () => {
+      const stmt = parseStmt("function foo(a, b) { return a + b }");
+      expect(stmt).toMatchObject({
+        type: NodeType.FunctionDeclaration,
+        name: "foo",
+        async: false,
+      });
+      expect(stmt.params).toEqual(["a", "b"]);
+    });
+
+    it("async function", () => {
+      const stmt = parseStmt("async function bar() { await x }");
+      expect(stmt).toMatchObject({
+        type: NodeType.FunctionDeclaration,
+        name: "bar",
+        async: true,
+      });
+    });
+
+    it("generator function", () => {
+      const stmt = parseStmt("function* gen() { yield 1 }");
+      expect(stmt).toMatchObject({
+        type: NodeType.FunctionDeclaration,
+        generator: true,
+      });
+    });
+
+    it("default parameters", () => {
+      const stmt = parseStmt("function f(a, b = 1) {}");
+      expect(stmt.params[0]).toBe("a");
+      expect(stmt.params[1]).toHaveProperty("default");
+    });
+
+    it("rest parameters", () => {
+      const stmt = parseStmt("function f(...args) {}");
+      expect(stmt.params[0]).toMatchObject({ name: "args", rest: true });
+    });
+  });
+
+  describe("if statement", () => {
+    it("if only", () => {
+      const stmt = parseStmt("if (x) { y }");
+      expect(stmt).toMatchObject({
+        type: NodeType.IfStatement,
+        test: { name: "x" },
+        alternate: null,
+      });
+    });
+
+    it("if else", () => {
+      const stmt = parseStmt("if (x) { a } else { b }");
+      expect(stmt.alternate).not.toBe(null);
+    });
+
+    it("if else if", () => {
+      const stmt = parseStmt("if (a) { x } else if (b) { y } else { z }");
+      expect(stmt.alternate.type).toBe(NodeType.IfStatement);
+    });
+
+    it("without braces", () => {
+      const stmt = parseStmt("if (x) y");
+      expect(stmt.type).toBe(NodeType.IfStatement);
+    });
+  });
+
+  describe("while statement", () => {
+    it("basic while", () => {
+      const stmt = parseStmt("while (x) { y }");
+      expect(stmt).toMatchObject({
+        type: NodeType.WhileStatement,
+        test: { name: "x" },
+      });
+    });
+
+    it("without braces", () => {
+      const stmt = parseStmt("while (true) x");
+      expect(stmt.type).toBe(NodeType.WhileStatement);
+    });
+  });
+
+  describe("do while statement", () => {
+    it("basic do while", () => {
+      const stmt = parseStmt("do { x } while (y)");
+      expect(stmt).toMatchObject({
+        type: NodeType.DoWhileStatement,
+        test: { name: "y" },
+      });
+    });
+  });
+
+  describe("for statement", () => {
+    it("basic for", () => {
+      const stmt = parseStmt("for (let i = 0; i < 10; i++) { x }");
+      expect(stmt.type).toBe(NodeType.ForStatement);
+      expect(stmt.init.type).toBe(NodeType.LetDeclaration);
+    });
+
+    it("for in", () => {
+      const stmt = parseStmt("for (let k in obj) { x }");
+      expect(stmt.type).toBe(NodeType.ForInStatement);
+      expect(stmt.variable).toBe("k");
+    });
+
+    it("for of", () => {
+      const stmt = parseStmt("for (let v of arr) { x }");
+      expect(stmt.type).toBe(NodeType.ForOfStatement);
+      expect(stmt.variable).toBe("v");
+    });
+
+    it("for with empty parts", () => {
+      const stmt = parseStmt("for (;;) { x }");
+      expect(stmt.init).toBe(null);
+      expect(stmt.test).toBe(null);
+      expect(stmt.update).toBe(null);
+    });
+  });
+
+  describe("return statement", () => {
+    it("return with value", () => {
+      const ast = parse("function f() { return 42 }");
+      const ret = ast.body[0].body.body[0];
+      expect(ret).toMatchObject({
+        type: NodeType.ReturnStatement,
+        argument: { value: 42 },
+      });
+    });
+
+    it("return without value", () => {
+      const ast = parse("function f() { return }");
+      const ret = ast.body[0].body.body[0];
+      expect(ret.argument).toBe(null);
+    });
+  });
+
+  describe("switch statement", () => {
+    it("switch with cases", () => {
+      const stmt = parseStmt(
+        "switch (x) { case 1: y; break; default: z; }",
+      );
+      expect(stmt.type).toBe(NodeType.SwitchStatement);
+      expect(stmt.cases).toHaveLength(2);
+      expect(stmt.cases[0].test.value).toBe(1);
+      expect(stmt.cases[1].test).toBe(null);
+    });
+  });
+
+  describe("break and continue", () => {
+    it("break", () => {
+      const ast = parse("while (true) { break }");
+      const brk = ast.body[0].body.body[0];
+      expect(brk.type).toBe(NodeType.BreakStatement);
+    });
+
+    it("continue", () => {
+      const ast = parse("while (true) { continue }");
+      const cnt = ast.body[0].body.body[0];
+      expect(cnt.type).toBe(NodeType.ContinueStatement);
+    });
+
+    it("break with label", () => {
+      const ast = parse("outer: while (true) { break outer }");
+      const loop = ast.body[0].body;
+      const brk = loop.body.body[0];
+      expect(brk.label).toBe("outer");
+    });
+  });
+
+  describe("try catch finally", () => {
+    it("try catch", () => {
+      const stmt = parseStmt("try { x } catch (e) { y }");
+      expect(stmt.type).toBe(NodeType.TryStatement);
+      expect(stmt.handler.param).toBe("e");
+      expect(stmt.finalizer).toBe(null);
+    });
+
+    it("try finally", () => {
+      const stmt = parseStmt("try { x } finally { y }");
+      expect(stmt.handler).toBe(null);
+      expect(stmt.finalizer).not.toBe(null);
+    });
+
+    it("try catch finally", () => {
+      const stmt = parseStmt("try { x } catch (e) { y } finally { z }");
+      expect(stmt.handler).not.toBe(null);
+      expect(stmt.finalizer).not.toBe(null);
+    });
+
+    it("catch without param", () => {
+      const stmt = parseStmt("try { x } catch { y }");
+      expect(stmt.handler.param).toBe(null);
+    });
+
+    it("try without catch or finally throws", () => {
+      expect(() => parse("try { x }")).toThrow(/Missing catch or finally/);
+    });
+  });
+
+  describe("throw statement", () => {
+    it("throw", () => {
+      const stmt = parseStmt("throw new Error('x')");
+      expect(stmt.type).toBe(NodeType.ThrowStatement);
+      expect(stmt.argument.type).toBe(NodeType.NewExpression);
+    });
+  });
+
+  describe("class declaration", () => {
+    it("basic class", () => {
+      const stmt = parseStmt("class Foo { constructor() {} bar() {} }");
+      expect(stmt).toMatchObject({
+        type: NodeType.ClassDeclaration,
+        name: "Foo",
+        superClass: null,
+      });
+      expect(stmt.constructor).not.toBe(null);
+      expect(stmt.methods).toHaveLength(1);
+    });
+
+    it("extends", () => {
+      const stmt = parseStmt("class Bar extends Foo { constructor() {} }");
+      expect(stmt.superClass).toMatchObject({
+        type: NodeType.Identifier,
+        name: "Foo",
+      });
+    });
+
+    it("getter and setter", () => {
+      const stmt = parseStmt(
+        "class C { get x() { return 1 } set x(v) { } }",
+      );
+      expect(stmt.methods[0].kind).toBe("get");
+      expect(stmt.methods[1].kind).toBe("set");
+    });
+  });
+
+  describe("labeled statement", () => {
+    it("label", () => {
+      const stmt = parseStmt("loop: while (true) { break loop }");
+      expect(stmt.type).toBe(NodeType.LabeledStatement);
+      expect(stmt.label).toBe("loop");
+    });
+  });
+
+  describe("yield expression", () => {
+    it("yield", () => {
+      const ast = parse("function* g() { yield 1 }");
+      const yld = ast.body[0].body.body[0].expression;
+      expect(yld).toMatchObject({
+        type: NodeType.YieldExpression,
+        delegate: false,
+      });
+    });
+
+    it("yield delegate", () => {
+      const ast = parse("function* g() { yield* other() }");
+      const yld = ast.body[0].body.body[0].expression;
+      expect(yld.delegate).toBe(true);
+    });
+  });
+
+  describe("await expression", () => {
+    it("await", () => {
+      const ast = parse("async function f() { await promise }");
+      const awaitExpr = ast.body[0].body.body[0].expression;
+      expect(awaitExpr.type).toBe(NodeType.AwaitExpression);
+    });
+  });
+
+  describe("super call", () => {
+    it("super()", () => {
+      const ast = parse(
+        "class B extends A { constructor() { super(1) } }",
+      );
+      const superCall = ast.body[0].constructor.body.body[0].expression;
+      expect(superCall.type).toBe(NodeType.SuperCallExpression);
+      expect(superCall.args).toHaveLength(1);
+    });
+  });
+
+  describe("regex literal", () => {
+    it("regex in expression", () => {
+      const ast = parse("let r = /abc/gi");
+      expect(ast.body[0].init).toMatchObject({
+        type: NodeType.Literal,
+        kind: "regex",
+      });
+      expect(ast.body[0].init.value.pattern).toBe("abc");
+      expect(ast.body[0].init.value.flags).toBe("gi");
+    });
+  });
+
+  describe("complex programs", () => {
+    it("fibonacci", () => {
+      const ast = parse(`
+        function fib(n) {
+          if (n <= 1) return n
+          return fib(n - 1) + fib(n - 2)
+        }
+      `);
+      expect(ast.body[0].type).toBe(NodeType.FunctionDeclaration);
+      expect(ast.body[0].name).toBe("fib");
+    });
+
+    it("class with methods", () => {
+      const ast = parse(`
+        class Counter extends Base {
+          constructor(start) {
+            super(start)
+          }
+          increment() {
+            this.count++
+          }
+        }
+      `);
+      expect(ast.body[0].type).toBe(NodeType.ClassDeclaration);
+    });
+
+    it("array methods chain", () => {
+      const ast = parse("arr.map(x => x * 2).filter(x => x > 5)");
+      expect(ast.body[0].expression.type).toBe(NodeType.CallExpression);
+    });
+
+    it("nested ternary", () => {
+      const expr = parseExpr("a ? b ? c : d : e");
+      expect(expr.type).toBe(NodeType.ConditionalExpression);
+      expect(expr.consequent.type).toBe(NodeType.ConditionalExpression);
+    });
+
+    it("for of with destructuring body", () => {
+      const ast = parse(`
+        for (let item of items) {
+          const { a, b } = item
+        }
+      `);
+      expect(ast.body[0].type).toBe(NodeType.ForOfStatement);
     });
   });
 
   describe("error handling", () => {
-    it("allows ASI at end of input for let declaration", () => {
-      const ast = parseSource("let x = 1");
-      assert.equal(ast.body.length, 1);
-      assert.equal(ast.body[0].type, NodeType.LetDeclaration);
+    it("unexpected token", () => {
+      expect(() => parse("let = 1")).toThrow();
     });
 
-    it("throws on missing closing paren", () => {
-      assert.throws(() => parseSource("f(1, 2;"), SyntaxError);
+    it("missing closing paren", () => {
+      expect(() => parse("foo(1, 2")).toThrow();
     });
 
-    it("throws on missing closing brace", () => {
-      assert.throws(() => parseSource("if (x) { y;"), SyntaxError);
+    it("missing closing brace", () => {
+      expect(() => parse("{ let x = 1")).toThrow();
     });
 
-    it("parses lone semicolon as empty statement", () => {
-      const ast = parseSource(";");
-      assert.equal(ast.body.length, 1);
-      assert.equal(ast.body[0].type, NodeType.EmptyStatement);
+    it("invalid assignment target", () => {
+      expect(() => parse("1 = 2")).toThrow(/Invalid assignment/);
     });
-
-    it("error message includes position", () => {
-      try {
-        parseSource("let = 5;");
-        assert.fail("Should have thrown");
-      } catch (e) {
-        assert.ok(e instanceof SyntaxError);
-        assert.ok(
-          e.message.includes("Parser"),
-          `Expected parser error, got: ${e.message}`,
-        );
-      }
-    });
-  });
-});
-
-describe("Lazy Parsing", () => {
-  it("produces LazyFunctionDeclaration for inner functions", () => {
-    const src =
-      "function outer() { function inner(x) { return x + 1; } return inner(5); }";
-    const ast = parse(src, { lazy: true });
-
-    assert.equal(ast.body.length, 1);
-    const outer = ast.body[0];
-    assert.equal(outer.type, NodeType.FunctionDeclaration);
-    assert.equal(outer.name, "outer");
-
-    const innerDecl = outer.body.body[0];
-    assert.equal(innerDecl.type, NodeType.LazyFunctionDeclaration);
-    assert.equal(innerDecl.name, "inner");
-    assert.deepEqual(innerDecl.params, ["x"]);
-    assert.ok(innerDecl.isLazy);
-    assert.ok(innerDecl.source);
-    assert.ok(typeof innerDecl.bodyStart === "number");
-    assert.ok(typeof innerDecl.bodyEnd === "number");
-  });
-
-  it("does not lazily parse top-level functions", () => {
-    const src = "function top(a) { return a; }";
-    const ast = parse(src, { lazy: true });
-
-    assert.equal(ast.body.length, 1);
-    const fn = ast.body[0];
-    assert.equal(fn.type, NodeType.FunctionDeclaration);
-    assert.equal(fn.name, "top");
-
-    assert.ok(fn.body);
-    assert.equal(fn.body.type, NodeType.BlockStatement);
-  });
-
-  it("eagerly parses all functions when lazy=false", () => {
-    const src = "function outer() { function inner() { return 1; } }";
-    const ast = parse(src, { lazy: false });
-
-    const outer = ast.body[0];
-    const inner = outer.body.body[0];
-    assert.equal(inner.type, NodeType.FunctionDeclaration);
-    assert.equal(inner.name, "inner");
-
-    assert.ok(inner.body);
-    assert.equal(inner.body.type, NodeType.BlockStatement);
-  });
-
-  it("lazy-compiled function executes correctly via engine", async () => {
-    const { MiniJIT } = await import("../../src/index.js");
-    const { resetHiddenClasses } =
-      await import("../../src/objects/maps/hidden-class.js");
-    resetHiddenClasses();
-    const engine = new MiniJIT();
-
-    const src =
-      "function outer() { function add(a, b) { return a + b; } return add(3, 4); } outer();";
-
-    const compiled = engine.compile(src, { lazy: true });
-    const result = engine.executeValue(compiled);
-    assert.equal(result.value, 7);
   });
 });

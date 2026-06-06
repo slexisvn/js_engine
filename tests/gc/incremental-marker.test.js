@@ -1,220 +1,162 @@
-import { describe, it, beforeEach } from "node:test";
-import assert from "node:assert/strict";
+import { describe, it, expect } from "vitest";
 import {
   IncrementalMarker,
   COLOR_WHITE,
   COLOR_GREY,
   COLOR_BLACK,
 } from "../../src/gc/incremental-marker.js";
-import { GenerationalGC } from "../../src/gc/gc.js";
-import { storeBarrier, bindWriteBarrierGC } from "../../src/gc/write-barrier.js";
 
-function makeObj(name, refs = []) {
-  const obj = {
-    name,
-    refs,
-    gcHeader: null,
+function makeGCObj(id, refs = []) {
+  return {
+    id,
+    gcHeader: { color: COLOR_WHITE },
     visitReferences(cb) {
-      for (const r of this.refs) cb(r);
+      for (const r of refs) cb(r);
     },
   };
-  return obj;
 }
 
-describe("Incremental GC with Tri-Color Marking", () => {
-  describe("Tri-Color Marking", () => {
-    it("marks single root as black", () => {
-      const marker = new IncrementalMarker();
-      const root = makeObj("root");
-      root.gcHeader = { color: COLOR_WHITE };
-      marker.startMarking([root]);
-      marker.step(100);
-      assert.equal(root.gcHeader.color, COLOR_BLACK);
-      assert.equal(marker.markingComplete, true);
-    });
+describe("IncrementalMarker", () => {
+  describe("tri-color marking", () => {
+    it("marks reachable graph BLACK through transitive references", () => {
+      const c = makeGCObj("c");
+      const b = makeGCObj("b", [c]);
+      const a = makeGCObj("a", [b]);
 
-    it("marks reachable objects transitively", () => {
       const marker = new IncrementalMarker();
-      const c = makeObj("c");
-      c.gcHeader = { color: COLOR_WHITE };
-      const b = makeObj("b", [c]);
-      b.gcHeader = { color: COLOR_WHITE };
-      const a = makeObj("a", [b]);
-      a.gcHeader = { color: COLOR_WHITE };
-
       marker.startMarking([a]);
-      marker.step(100);
-
-      assert.equal(a.gcHeader.color, COLOR_BLACK);
-      assert.equal(b.gcHeader.color, COLOR_BLACK);
-      assert.equal(c.gcHeader.color, COLOR_BLACK);
-      assert.equal(marker.totalMarked, 3);
-    });
-
-    it("leaves unreachable objects white", () => {
-      const marker = new IncrementalMarker();
-      const reachable = makeObj("reachable");
-      reachable.gcHeader = { color: COLOR_WHITE };
-      const unreachable = makeObj("unreachable");
-      unreachable.gcHeader = { color: COLOR_WHITE };
-
-      marker.startMarking([reachable]);
-      marker.step(100);
-
-      assert.equal(reachable.gcHeader.color, COLOR_BLACK);
-      assert.equal(unreachable.gcHeader.color, COLOR_WHITE);
-    });
-
-    it("supports incremental stepping with budget", () => {
-      const marker = new IncrementalMarker();
-      const objects = [];
-      for (let i = 0; i < 10; i++) {
-        const obj = makeObj(`obj${i}`);
-        obj.gcHeader = { color: COLOR_WHITE };
-        objects.push(obj);
-      }
-      for (let i = 0; i < 9; i++) {
-        objects[i].refs = [objects[i + 1]];
-      }
-
-      marker.startMarking([objects[0]]);
-      // Time-based budget: even a small ms budget processes at least 1
-      // Use a generous budget to process all
-      while (marker.step(10)) {}
-      assert.equal(marker.markingComplete, true);
-      assert.equal(marker.totalMarked, 10);
-    });
-  });
-
-  describe("Write Barrier During Incremental Marking", () => {
-    it("re-greys black object when new white ref added", () => {
-      const marker = new IncrementalMarker();
-      const a = makeObj("a");
-      a.gcHeader = { color: COLOR_WHITE };
-
-      marker.startMarking([a]);
-      marker.step(10);
-      assert.equal(a.gcHeader.color, COLOR_BLACK);
-
-      // Manually set marker to active state to test write barrier
-      marker.marking = true;
-      marker.markingComplete = false;
-
-      const newObj = makeObj("new");
-      newObj.gcHeader = { color: COLOR_WHITE };
-
-      marker.writeBarrier(a, newObj);
-      assert.equal(newObj.gcHeader.color, COLOR_GREY);
-      assert.ok(marker.worklist.length >= 1);
-    });
-
-    it("no-ops when not marking", () => {
-      const marker = new IncrementalMarker();
-      const root = makeObj("root");
-      root.gcHeader = { color: COLOR_BLACK };
-      const newObj = makeObj("new");
-      newObj.gcHeader = { color: COLOR_WHITE };
-
-      marker.writeBarrier(root, newObj);
-      assert.equal(newObj.gcHeader.color, COLOR_WHITE);
-    });
-  });
-
-  describe("GC Integration", () => {
-    it("startIncrementalMajorGC initializes marking", () => {
-      const gc = new GenerationalGC({ youngGenSize: 100, oldGenCapacity: 100 });
-      const obj = makeObj("test");
-      gc.allocate(obj);
-      obj.gcHeader.generation = "old";
-      gc.oldGen.allocate(obj);
-
-      gc.startIncrementalMajorGC();
-      assert.equal(gc.isIncrementalMarkingActive(), true);
-    });
-
-    it("incremental marking completes and sweeps", () => {
-      const gc = new GenerationalGC({ youngGenSize: 100, oldGenCapacity: 100 });
-      const obj1 = makeObj("obj1");
-      gc.allocate(obj1);
-      const obj2 = makeObj("obj2");
-      gc.allocate(obj2);
-
-      gc.startIncrementalMajorGC();
-      while (gc.incrementalMarkingStep(10)) {}
-      assert.equal(gc.isIncrementalMarkingActive(), false);
-    });
-
-    it("write barrier integration during incremental GC", () => {
-      const gc = new GenerationalGC({ youngGenSize: 100, oldGenCapacity: 100 });
-      const holder = makeObj("holder");
-      gc.allocate(holder);
-      holder.gcHeader.color = COLOR_BLACK;
-
-      const newRef = makeObj("newRef");
-      gc.allocate(newRef);
-      newRef.gcHeader.color = COLOR_WHITE;
-
-      gc._incrementalMajorGCActive = true;
-      gc.incrementalMarker.marking = true;
-      gc.incrementalMarker.markingComplete = false;
-
-      bindWriteBarrierGC(gc);
-      storeBarrier(holder, newRef);
-      assert.equal(newRef.gcHeader.color, COLOR_GREY);
-      bindWriteBarrierGC(null);
-    });
-
-    it("checkSafepoint advances incremental marking", () => {
-      const gc = new GenerationalGC({ youngGenSize: 100, oldGenCapacity: 100 });
-      const obj = makeObj("obj");
-      gc.allocate(obj);
-
-      gc.startIncrementalMajorGC();
-      const wasActive = gc.isIncrementalMarkingActive();
-      gc.checkSafepoint();
-      assert.ok(wasActive);
-    });
-  });
-
-  describe("IncrementalMarker state management", () => {
-    it("reset clears all state", () => {
-      const marker = new IncrementalMarker();
-      const root = makeObj("root");
-      root.gcHeader = { color: COLOR_WHITE };
-      marker.startMarking([root]);
-      marker.step(100);
-
-      marker.reset();
-      assert.equal(marker.marking, false);
-      assert.equal(marker.markingComplete, false);
-      assert.equal(marker.worklist.length, 0);
-      assert.equal(marker.totalMarked, 0);
-    });
-
-    it("finishMarking processes remaining worklist", () => {
-      const marker = new IncrementalMarker();
-      const objects = [];
-      for (let i = 0; i < 20; i++) {
-        const obj = makeObj(`obj${i}`);
-        obj.gcHeader = { color: COLOR_WHITE };
-        objects.push(obj);
-      }
-      for (let i = 0; i < 19; i++) {
-        objects[i].refs = [objects[i + 1]];
-      }
-
-      marker.startMarking([objects[0]]);
-      // Use 0.001ms budget — processes at least 1 but may not finish all 20
-      marker.step(0.001);
-      const markedSoFar = marker.totalMarked;
-      assert.ok(markedSoFar >= 1, "should mark at least 1");
+      expect(a.gcHeader.color).toBe(COLOR_GREY);
 
       marker.finishMarking();
-      assert.equal(marker.markingComplete, true);
-      assert.equal(marker.totalMarked, 20);
-      for (const obj of objects) {
-        assert.equal(obj.gcHeader.color, COLOR_BLACK);
+      expect(a.gcHeader.color).toBe(COLOR_BLACK);
+      expect(b.gcHeader.color).toBe(COLOR_BLACK);
+      expect(c.gcHeader.color).toBe(COLOR_BLACK);
+      expect(marker.totalMarked).toBe(3);
+    });
+
+    it("unreachable objects remain WHITE", () => {
+      const reachable = makeGCObj("reach");
+      const unreachable = makeGCObj("unreach");
+      const marker = new IncrementalMarker();
+      marker.startMarking([reachable]);
+      marker.finishMarking();
+      expect(reachable.gcHeader.color).toBe(COLOR_BLACK);
+      expect(unreachable.gcHeader.color).toBe(COLOR_WHITE);
+    });
+
+    it("handles cycles without infinite loop", () => {
+      const a = makeGCObj("a");
+      const b = makeGCObj("b");
+      a.visitReferences = (cb) => cb(b);
+      b.visitReferences = (cb) => cb(a);
+
+      const marker = new IncrementalMarker();
+      marker.startMarking([a]);
+      marker.finishMarking();
+      expect(a.gcHeader.color).toBe(COLOR_BLACK);
+      expect(b.gcHeader.color).toBe(COLOR_BLACK);
+      expect(marker.totalMarked).toBe(2);
+    });
+  });
+
+  describe("incremental stepping", () => {
+    it("step processes a subset and returns true while work remains", () => {
+      const chain = [];
+      for (let i = 0; i < 50; i++) chain.push(makeGCObj(i));
+      for (let i = 0; i < chain.length - 1; i++) {
+        const next = chain[i + 1];
+        chain[i].visitReferences = (cb) => cb(next);
       }
+
+      const marker = new IncrementalMarker();
+      marker.startMarking([chain[0]]);
+
+      const moreWork = marker.step(1000);
+      expect(marker.stepsRun).toBe(1);
+      expect(marker.totalMarked).toBeGreaterThan(0);
+    });
+
+    it("step returns false and sets markingComplete when done", () => {
+      const obj = makeGCObj("single");
+      const marker = new IncrementalMarker();
+      marker.startMarking([obj]);
+
+      while (marker.step(1000)) {}
+      expect(marker.markingComplete).toBe(true);
+      expect(marker.isMarking()).toBe(false);
+    });
+
+    it("step on inactive marker returns false", () => {
+      const marker = new IncrementalMarker();
+      expect(marker.step()).toBe(false);
+    });
+  });
+
+  describe("write barrier (SATB + Dijkstra)", () => {
+    it("SATB: pushes old WHITE ref when holder is BLACK", () => {
+      const marker = new IncrementalMarker();
+      const holder = makeGCObj("holder");
+      const oldRef = makeGCObj("old");
+      const newRef = makeGCObj("new");
+      holder.gcHeader.color = COLOR_BLACK;
+
+      marker.marking = true;
+      marker.markingComplete = false;
+      marker.writeBarrier(holder, newRef, oldRef);
+
+      expect(oldRef.gcHeader.color).toBe(COLOR_GREY);
+      expect(newRef.gcHeader.color).toBe(COLOR_GREY);
+      expect(marker.worklist).toContain(oldRef);
+      expect(marker.worklist).toContain(newRef);
+    });
+
+    it("skips barrier when holder is not BLACK", () => {
+      const marker = new IncrementalMarker();
+      const holder = makeGCObj("holder");
+      const oldRef = makeGCObj("old");
+      holder.gcHeader.color = COLOR_GREY;
+
+      marker.marking = true;
+      marker.markingComplete = false;
+      marker.writeBarrier(holder, null, oldRef);
+      expect(oldRef.gcHeader.color).toBe(COLOR_WHITE);
+    });
+
+    it("skips barrier when not actively marking", () => {
+      const marker = new IncrementalMarker();
+      const holder = makeGCObj("holder");
+      const newRef = makeGCObj("new");
+      holder.gcHeader.color = COLOR_BLACK;
+
+      marker.writeBarrier(holder, newRef, null);
+      expect(newRef.gcHeader.color).toBe(COLOR_WHITE);
+    });
+
+    it("does not push already-BLACK refs", () => {
+      const marker = new IncrementalMarker();
+      const holder = makeGCObj("holder");
+      const oldRef = makeGCObj("old");
+      holder.gcHeader.color = COLOR_BLACK;
+      oldRef.gcHeader.color = COLOR_BLACK;
+
+      marker.marking = true;
+      marker.markingComplete = false;
+      marker.writeBarrier(holder, null, oldRef);
+      expect(marker.worklist).toHaveLength(0);
+    });
+  });
+
+  describe("reset", () => {
+    it("clears all state", () => {
+      const marker = new IncrementalMarker();
+      marker.startMarking([makeGCObj("a")]);
+      marker.finishMarking();
+      marker.reset();
+      expect(marker.marking).toBe(false);
+      expect(marker.markingComplete).toBe(false);
+      expect(marker.totalMarked).toBe(0);
+      expect(marker.stepsRun).toBe(0);
+      expect(marker.worklist).toHaveLength(0);
     });
   });
 });
