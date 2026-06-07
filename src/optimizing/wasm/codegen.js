@@ -1673,16 +1673,36 @@ export class WasmCodegen {
         if (loc === undefined) break;
         const leftType = analysis.nodeWasmType.get(node.inputs[0].id);
         const rightType = analysis.nodeWasmType.get(node.inputs[1].id);
+        const rightLocal = local(node.inputs[1].id);
+
+        if (deoptImportIdx >= 0 && node.frameState) {
+          const fsId = node.frameState.id ?? 0;
+          bytes.push(wasmFormat.OP_LOCAL_GET, ...wasmFormat.encodeU32(rightLocal));
+          if (rightType === wasmFormat.TYPE_F64)
+            bytes.push(wasmFormat.OP_I32_TRUNC_F64_S);
+          bytes.push(wasmFormat.OP_I32_EQZ);
+          bytes.push(wasmFormat.OP_IF, wasmFormat.TYPE_VOID);
+          this.emitDeoptSnapshot(node.frameState, analysis, bytes);
+          bytes.push(
+            wasmFormat.OP_I32_CONST,
+            ...wasmFormat.encodeS32(deoptReasonId(DEOPT_DIVISION_BY_ZERO)),
+          );
+          bytes.push(wasmFormat.OP_I32_CONST, ...wasmFormat.encodeS32(fsId));
+          bytes.push(
+            wasmFormat.OP_CALL,
+            ...wasmFormat.encodeU32(deoptImportIdx),
+          );
+          bytes.push(wasmFormat.OP_UNREACHABLE);
+          bytes.push(wasmFormat.OP_END);
+        }
+
         bytes.push(
           wasmFormat.OP_LOCAL_GET,
           ...wasmFormat.encodeU32(local(node.inputs[0].id)),
         );
         if (leftType === wasmFormat.TYPE_F64)
           bytes.push(wasmFormat.OP_I32_TRUNC_F64_S);
-        bytes.push(
-          wasmFormat.OP_LOCAL_GET,
-          ...wasmFormat.encodeU32(local(node.inputs[1].id)),
-        );
+        bytes.push(wasmFormat.OP_LOCAL_GET, ...wasmFormat.encodeU32(rightLocal));
         if (rightType === wasmFormat.TYPE_F64)
           bytes.push(wasmFormat.OP_I32_TRUNC_F64_S);
         bytes.push(INT32_ARITH_OPCODES[node.type]);

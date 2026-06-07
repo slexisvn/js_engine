@@ -300,7 +300,9 @@ function compileInstruction(
         if (
           op === bytecode.ROP_ADD ||
           op === bytecode.ROP_SUB ||
-          op === bytecode.ROP_MUL
+          op === bytecode.ROP_MUL ||
+          op === bytecode.ROP_DIV ||
+          op === bytecode.ROP_MOD
         ) {
           result.frameState = frameState;
         }

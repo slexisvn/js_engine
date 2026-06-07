@@ -149,6 +149,7 @@ export function mkNull() {
 }
 
 export function mkNumber(n) {
+  if (n === 0 && (1 / n) === -Infinity) return mkDouble(n);
   if (Number.isInteger(n) && n >= SMI_MIN && n <= SMI_MAX) {
     return mkSmi(n);
   }

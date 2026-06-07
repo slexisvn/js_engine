@@ -37,14 +37,14 @@ export function installPromiseBuiltin(interpreter) {
         const resolveFn = mkFunction({
           name: "Promise.resolveCapability",
           call: (resolveArgs) => {
-            capability.resolve(resolveArgs[0] || mkUndefined());
+            capability.resolve(resolveArgs.length > 0 ? resolveArgs[0] : mkUndefined());
             return mkUndefined();
           },
         });
         const rejectFn = mkFunction({
           name: "Promise.rejectCapability",
           call: (rejectArgs) => {
-            capability.reject(rejectArgs[0] || mkUndefined());
+            capability.reject(rejectArgs.length > 0 ? rejectArgs[0] : mkUndefined());
             return mkUndefined();
           },
         });
@@ -67,14 +67,14 @@ export function installPromiseBuiltin(interpreter) {
     call: (args) =>
       promiseResolve(
         interpreter.microtaskQueue,
-        args[0] || mkUndefined(),
+        args.length > 0 ? args[0] : mkUndefined(),
         interpreter,
       ),
   });
   promiseCtor.properties.reject = mkFunction({
     name: "Promise.reject",
     call: (args) =>
-      promiseReject(interpreter.microtaskQueue, args[0] || mkUndefined()),
+      promiseReject(interpreter.microtaskQueue, args.length > 0 ? args[0] : mkUndefined()),
   });
   promiseCtor.properties.all = mkFunction({
     name: "Promise.all",

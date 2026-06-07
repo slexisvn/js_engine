@@ -468,6 +468,13 @@ export const functionMethods = {
 
     this.temps.free(objReg);
 
+    const outerBreak = this._breakJumps;
+    const outerContinue = this._continueJumps;
+    const breakJumps = [];
+    const continueJumps = [];
+    this._breakJumps = breakJumps;
+    this._continueJumps = continueJumps;
+
     const loopStart = this.func.instructions.length;
     this.func.emit(bytecode.ROP_LDA_REG, iSlot);
     const fbSlot = this.func.allocFeedbackSlot();
@@ -477,8 +484,13 @@ export const functionMethods = {
     this.func.emit(bytecode.ROP_LDA_INDEX, keysSlot, iSlot);
     this.func.emit(bytecode.ROP_STAR, varSlot);
 
-    this.compileStatements(node.body.body);
+    if (node.body.type === "BlockStatement") {
+      this.compileStatements(node.body.body);
+    } else {
+      this.compileStatement(node.body);
+    }
 
+    const continueTarget = this.func.instructions.length;
     this.func.emit(bytecode.ROP_LDA_REG, iSlot);
     const oneIdx = this.func.addConstant(1);
     const oneReg = this.temps.alloc();
@@ -491,7 +503,13 @@ export const functionMethods = {
     this.temps.free(oneReg);
 
     this.func.emit(bytecode.ROP_JUMP, loopStart);
-    this.func.patchJump(exitJump, this.func.instructions.length);
+    const endTarget = this.func.instructions.length;
+    this.func.patchJump(exitJump, endTarget);
+    for (const j of breakJumps) this.func.patchJump(j, endTarget);
+    for (const j of continueJumps) this.func.patchJump(j, continueTarget);
+
+    this._breakJumps = outerBreak;
+    this._continueJumps = outerContinue;
   },
 
   compileForOfStatement(node) {
@@ -521,6 +539,13 @@ export const functionMethods = {
     this.func.emit(bytecode.ROP_GET_ITERATOR);
     this.func.emit(bytecode.ROP_STAR, iterSlot);
 
+    const outerBreak = this._breakJumps;
+    const outerContinue = this._continueJumps;
+    const breakJumps = [];
+    const continueJumps = [];
+    this._breakJumps = breakJumps;
+    this._continueJumps = continueJumps;
+
     const loopStart = this.func.instructions.length;
 
     this.func.emit(bytecode.ROP_LDA_REG, iterSlot);
@@ -535,10 +560,20 @@ export const functionMethods = {
     this.func.emit(bytecode.ROP_ITER_VALUE);
     this.func.emit(bytecode.ROP_STAR, varSlot);
 
-    this.compileStatements(node.body.body);
+    if (node.body.type === "BlockStatement") {
+      this.compileStatements(node.body.body);
+    } else {
+      this.compileStatement(node.body);
+    }
 
     this.func.emit(bytecode.ROP_JUMP, loopStart);
-    this.func.patchJump(exitJump, this.func.instructions.length);
+    const endTarget = this.func.instructions.length;
+    this.func.patchJump(exitJump, endTarget);
+    for (const j of breakJumps) this.func.patchJump(j, endTarget);
+    for (const j of continueJumps) this.func.patchJump(j, loopStart);
+
+    this._breakJumps = outerBreak;
+    this._continueJumps = outerContinue;
   },
 
   compileObjectDestructuring(node) {
