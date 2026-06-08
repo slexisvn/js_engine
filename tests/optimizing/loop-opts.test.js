@@ -136,4 +136,37 @@ describe("hoistLoopInvariants", () => {
     hoistLoopInvariants(graph, findLoops);
     expect(body.nodes).toContain(load);
   });
+
+  it("hoists LoadField with no aliasing store in loop body", () => {
+    const { graph, preHeader, header, body, exit } = makeSimpleLoop();
+    const param = graph.addParameter(0);
+    const load = irLoadField(param, 0);
+    body.nodes.splice(0, 0, load);
+    load.block = body;
+    const cond = irConstant(1);
+    header.addNode(cond);
+    header.addNode(irBranch(cond, body, exit));
+    exit.addNode(irReturn(irConstant(0)));
+    hoistLoopInvariants(graph, findLoops);
+    expect(preHeader.nodes.some(n => n.type === IR_LOAD_FIELD)).toBe(true);
+    expect(body.nodes.every(n => n.type !== IR_LOAD_FIELD)).toBe(true);
+  });
+
+  it("hoists chain of invariant nodes via worklist", () => {
+    const { graph, preHeader, header, body, exit } = makeSimpleLoop();
+    const param = graph.addParameter(0);
+    const check = irCheckSmi(param);
+    body.nodes.splice(0, 0, check);
+    check.block = body;
+    const c = irConstant(1);
+    body.nodes.splice(1, 0, c);
+    c.block = body;
+    const cond = irConstant(1);
+    header.addNode(cond);
+    header.addNode(irBranch(cond, body, exit));
+    exit.addNode(irReturn(irConstant(0)));
+    hoistLoopInvariants(graph, findLoops);
+    expect(preHeader.nodes.some(n => n.type === IR_CHECK_SMI)).toBe(true);
+    expect(preHeader.nodes.some(n => n.type === IR_CONSTANT && n.props.value === 1)).toBe(true);
+  });
 });

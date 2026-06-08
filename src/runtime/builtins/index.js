@@ -82,6 +82,7 @@ export const builtins = {
 
   typeof: {
     name: "typeof",
+    pure: true,
     call(args) {
       const v = args[0];
       if (!v) return mkString("undefined");
@@ -91,6 +92,7 @@ export const builtins = {
 
   parseInt: {
     name: "parseInt",
+    pure: true,
     call(args) {
       const str = extractArgString(args, 0, "NaN");
       const radix = args.length > 1 ? extractArgNumber(args, 1, 10) : 10;
@@ -101,6 +103,7 @@ export const builtins = {
 
   parseFloat: {
     name: "parseFloat",
+    pure: true,
     call(args) {
       const str = extractArgString(args, 0, "NaN");
       const result = parseFloat(str);
@@ -110,6 +113,7 @@ export const builtins = {
 
   isNaN: {
     name: "isNaN",
+    pure: true,
     call(args) {
       const v = args[0] || mkUndefined();
       return mkBool(Number.isNaN(toNumber(v)));
@@ -118,6 +122,7 @@ export const builtins = {
 
   isFinite: {
     name: "isFinite",
+    pure: true,
     call(args) {
       const v = args[0] || mkUndefined();
       return mkBool(Number.isFinite(toNumber(v)));
@@ -126,6 +131,7 @@ export const builtins = {
 
   Number: {
     name: "Number",
+    pure: true,
     call(args) {
       if (args.length === 0) return mkSmi(0);
       return mkNumber(toNumber(args[0]));
@@ -134,6 +140,7 @@ export const builtins = {
 
   Boolean: {
     name: "Boolean",
+    pure: true,
     call(args) {
       if (args.length === 0) return mkBool(false);
       return mkBool(toBool(args[0]));
@@ -262,38 +269,47 @@ export const builtins = {
   Math: {
     abs: {
       name: "Math.abs",
+      pure: true,
       call: (args) => mkNumber(Math.abs(extractArgNumber(args, 0, NaN))),
     },
     floor: {
       name: "Math.floor",
+      pure: true,
       call: (args) => mkNumber(Math.floor(extractArgNumber(args, 0, NaN))),
     },
     ceil: {
       name: "Math.ceil",
+      pure: true,
       call: (args) => mkNumber(Math.ceil(extractArgNumber(args, 0, NaN))),
     },
     round: {
       name: "Math.round",
+      pure: true,
       call: (args) => mkNumber(Math.round(extractArgNumber(args, 0, NaN))),
     },
     trunc: {
       name: "Math.trunc",
+      pure: true,
       call: (args) => mkNumber(Math.trunc(extractArgNumber(args, 0, NaN))),
     },
     sign: {
       name: "Math.sign",
+      pure: true,
       call: (args) => mkNumber(Math.sign(extractArgNumber(args, 0, NaN))),
     },
     sqrt: {
       name: "Math.sqrt",
+      pure: true,
       call: (args) => mkNumber(Math.sqrt(extractArgNumber(args, 0, NaN))),
     },
     log: {
       name: "Math.log",
+      pure: true,
       call: (args) => mkNumber(Math.log(extractArgNumber(args, 0, NaN))),
     },
     pow: {
       name: "Math.pow",
+      pure: true,
       call: (args) =>
         mkNumber(
           Math.pow(
@@ -304,6 +320,7 @@ export const builtins = {
     },
     min: {
       name: "Math.min",
+      pure: true,
       call: (args) => {
         if (args.length === 0) return mkDouble(Infinity);
         let min = extractArgNumber(args, 0, NaN);
@@ -316,6 +333,7 @@ export const builtins = {
     },
     max: {
       name: "Math.max",
+      pure: true,
       call: (args) => {
         if (args.length === 0) return mkDouble(-Infinity);
         let max = extractArgNumber(args, 0, NaN);

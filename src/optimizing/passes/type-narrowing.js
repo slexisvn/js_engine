@@ -30,6 +30,7 @@ import { tracer } from "../../core/tracing/index.js";
 import {
   TypeKind,
   booleanType,
+  excludeType,
   joinTypes,
   narrowType,
   numberType,
@@ -185,22 +186,21 @@ function factsForDominatorChild(block, child, facts) {
     ? block.getTerminator()
     : block.nodes[block.nodes.length - 1];
   if (!terminator || terminator.type !== IR_BRANCH) return next;
-  if (terminator.props.trueBlock !== child.id) return next;
-  recordTrueBranchFact(terminator, next);
+  if (terminator.props.trueBlock === child.id) {
+    recordBranchFact(terminator, next, true);
+  } else if (terminator.props.falseBlock === child.id) {
+    recordBranchFact(terminator, next, false);
+  }
   return next;
 }
 
-function recordTrueBranchFact(branch, facts) {
-  if (!branch.inputs[0]) return;
+function extractTypeofComparison(branch) {
+  if (!branch.inputs[0]) return null;
   const condition = branch.inputs[0];
-  if (
-    condition.type !== IR_INT32_COMPARE ||
-    condition.props.op !== "==" ||
-    condition.inputs.length !== 2
-  ) {
-    return;
-  }
-
+  if (condition.type !== IR_INT32_COMPARE || condition.inputs.length !== 2)
+    return null;
+  const { op } = condition.props;
+  if (op !== "==" && op !== "===") return null;
   const [left, right] = condition.inputs;
   if (
     left.type === IR_TYPEOF &&
@@ -208,12 +208,20 @@ function recordTrueBranchFact(branch, facts) {
     typeof right.props.value === "string" &&
     left.inputs[0]
   ) {
-    const fact = typeFromTypeof(right.props.value);
-    if (fact)
-      facts.set(
-        left.inputs[0].id,
-        narrowType(facts.get(left.inputs[0].id), fact),
-      );
+    return { valueId: left.inputs[0].id, typeofString: right.props.value };
+  }
+  return null;
+}
+
+function recordBranchFact(branch, facts, isTrueBranch) {
+  const cmp = extractTypeofComparison(branch);
+  if (!cmp) return;
+  const fact = typeFromTypeof(cmp.typeofString);
+  if (!fact) return;
+  if (isTrueBranch) {
+    facts.set(cmp.valueId, narrowType(facts.get(cmp.valueId), fact));
+  } else {
+    facts.set(cmp.valueId, excludeType(facts.get(cmp.valueId), fact));
   }
 }
 

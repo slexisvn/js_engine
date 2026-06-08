@@ -104,7 +104,7 @@ describe("eliminateRedundantChecks", () => {
     expect(ret.inputs[0]).toBe(check1);
   });
 
-  it("invalidates CheckMap after StoreField on same object", () => {
+  it("preserves CheckMap across StoreField on same object", () => {
     const graph = new CFGFunction("test");
     const block = graph.addBlock();
     const obj = graph.addParameter(0);
@@ -117,7 +117,49 @@ describe("eliminateRedundantChecks", () => {
     const ret = irReturn(check2);
     block.addNode(ret);
     const count = eliminateRedundantChecks(graph);
-    expect(count).toBe(0);
+    expect(count).toBe(1);
+    expect(ret.inputs[0]).toBe(check1);
+  });
+
+  it("preserves CheckMap across multiple StoreFields to different offsets", () => {
+    const graph = new CFGFunction("test");
+    const block = graph.addBlock();
+    const obj = graph.addParameter(0);
+    const check1 = irCheckMap(obj, 42);
+    block.addNode(check1);
+    const s1 = irStoreField(obj, 0, irConstant(1));
+    block.addNode(s1);
+    const s2 = irStoreField(obj, 1, irConstant(2));
+    block.addNode(s2);
+    const s3 = irStoreField(obj, 2, irConstant(3));
+    block.addNode(s3);
+    const check2 = irCheckMap(obj, 42);
+    block.addNode(check2);
+    const ret = irReturn(check2);
+    block.addNode(ret);
+    const count = eliminateRedundantChecks(graph);
+    expect(count).toBe(1);
+    expect(ret.inputs[0]).toBe(check1);
+  });
+
+  it("eliminates CheckMap in dominated block across StoreField", () => {
+    const graph = new CFGFunction("test");
+    const b0 = graph.addBlock();
+    const b1 = graph.addBlock();
+    const obj = graph.addParameter(0);
+    const check1 = irCheckMap(obj, 42);
+    b0.addNode(check1);
+    const store = irStoreField(obj, 0, irConstant(5));
+    b0.addNode(store);
+    b0.addSuccessor(b1);
+    b0.addNode(irJump(b1));
+    const check2 = irCheckMap(obj, 42);
+    b1.addNode(check2);
+    const ret = irReturn(check2);
+    b1.addNode(ret);
+    const count = eliminateRedundantChecks(graph);
+    expect(count).toBe(1);
+    expect(ret.inputs[0]).toBe(check1);
   });
 });
 

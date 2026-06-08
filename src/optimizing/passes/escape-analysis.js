@@ -94,11 +94,9 @@ export function escapeAnalysisAndScalarReplacement(graph) {
 
     if (!allDominated) continue;
 
-    const virtualStateProp = new Map();
-    const virtualStateOffset = new Map();
     const toDelete = new Set([...aliases].map((node) => node.id));
 
-    const processBlock = (block) => {
+    const processBlock = (block, propState, offsetState) => {
       for (let i = 0; i < block.nodes.length; i++) {
         const node = block.nodes[i];
         if (node === alloc) continue;
@@ -116,14 +114,14 @@ export function escapeAnalysisAndScalarReplacement(graph) {
         ) {
           const offset = node.props.offset;
           const value = node.inputs[1];
-          virtualStateOffset.set(offset, value);
+          offsetState.set(offset, value);
           toDelete.add(node.id);
         } else if (
           node.type === IR_LOAD_FIELD &&
           toDelete.has(node.inputs[0]?.id)
         ) {
           const offset = node.props.offset;
-          let val = virtualStateOffset.get(offset);
+          let val = offsetState.get(offset);
           if (!val) {
             val = insertUndefinedConstant(block, i);
             blockOf.set(val, block);
@@ -138,14 +136,14 @@ export function escapeAnalysisAndScalarReplacement(graph) {
         ) {
           const propName = node.props.propName;
           const value = node.inputs[1];
-          virtualStateProp.set(propName, value);
+          propState.set(propName, value);
           toDelete.add(node.id);
         } else if (
           node.type === IR_GENERIC_GET_PROP &&
           toDelete.has(node.inputs[0]?.id)
         ) {
           const propName = node.props.propName;
-          let val = virtualStateProp.get(propName);
+          let val = propState.get(propName);
           if (!val) {
             val = insertUndefinedConstant(block, i);
             blockOf.set(val, block);
@@ -168,7 +166,7 @@ export function escapeAnalysisAndScalarReplacement(graph) {
           const value =
             node.type === IR_STORE_ELEMENT ? node.inputs[2] : node.inputs[2];
           if (value) {
-            virtualStateOffset.set("elem_" + idx, value);
+            offsetState.set("elem_" + idx, value);
             toDelete.add(node.id);
           }
         } else if (
@@ -182,7 +180,7 @@ export function escapeAnalysisAndScalarReplacement(graph) {
               : node.inputs[1]
                 ? node.inputs[1].id
                 : 0;
-          let val = virtualStateOffset.get("elem_" + idx);
+          let val = offsetState.get("elem_" + idx);
           if (!val) {
             val = insertUndefinedConstant(block, i);
             blockOf.set(val, block);
@@ -195,14 +193,16 @@ export function escapeAnalysisAndScalarReplacement(graph) {
       }
     };
 
-    const walkDom = (block) => {
-      processBlock(block);
+    const walkDom = (block, propState, offsetState) => {
+      const localProp = new Map(propState);
+      const localOffset = new Map(offsetState);
+      processBlock(block, localProp, localOffset);
       for (const child of children.get(block) || []) {
-        walkDom(child);
+        walkDom(child, localProp, localOffset);
       }
     };
 
-    walkDom(allocBlock);
+    walkDom(allocBlock, new Map(), new Map());
 
     removeNodes(graph, toDelete);
 
@@ -264,18 +264,14 @@ function insertUndefinedConstant(block, index) {
 
 function replaceValue(graph, oldValue, newValue) {
   for (const use of [...oldValue.uses]) {
-    let count = 0;
     for (let i = 0; i < use.inputs.length; i++) {
       if (use.inputs[i] === oldValue) {
         use.inputs[i] = newValue;
-        count++;
+        newValue.uses.push(use);
       }
     }
-    if (count > 0) {
-      oldValue.uses = oldValue.uses.filter((candidate) => candidate !== use);
-      for (let i = 0; i < count; i++) newValue.uses.push(use);
-    }
   }
+  oldValue.uses.length = 0;
 }
 
 function removeNodes(graph, toDelete) {

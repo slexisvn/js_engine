@@ -77,26 +77,38 @@ export function hoistLoopInvariants(graph, findLoopsFn) {
     };
 
     const invariantNodes = [];
-    let changed = true;
     const alreadyInvariant = new Set();
+    const candidates = [];
 
-    while (changed) {
-      changed = false;
-      for (const block of bodyBlocks) {
-        for (const node of block.nodes) {
-          if (alreadyInvariant.has(node.id)) continue;
-          if (!HOISTABLE.has(node.type)) continue;
-          if (node.frameState) continue;
-          if (node.type === IR_LOAD_FIELD && loadAliasesStore(node)) continue;
+    for (const block of bodyBlocks) {
+      for (const node of block.nodes) {
+        if (!HOISTABLE.has(node.type)) continue;
+        if (node.frameState) continue;
+        if (node.type === IR_LOAD_FIELD && loadAliasesStore(node)) continue;
+        candidates.push({ node, block });
+      }
+    }
 
-          const allInputsOutside = node.inputs.every(
-            (inp) => isDefinedOutsideLoop(inp) || alreadyInvariant.has(inp.id),
-          );
+    const worklist = [...candidates];
+    while (worklist.length > 0) {
+      const { node, block } = worklist.pop();
+      if (alreadyInvariant.has(node.id)) continue;
 
-          if (allInputsOutside) {
-            invariantNodes.push({ node, block });
-            alreadyInvariant.add(node.id);
-            changed = true;
+      const allInputsOutside = node.inputs.every(
+        (inp) => isDefinedOutsideLoop(inp) || alreadyInvariant.has(inp.id),
+      );
+
+      if (allInputsOutside) {
+        invariantNodes.push({ node, block });
+        alreadyInvariant.add(node.id);
+        for (const use of node.uses) {
+          if (!alreadyInvariant.has(use.id) && bodyBlockIds.has(nodeToBlock.get(use.id)?.id)) {
+            const useBlock = nodeToBlock.get(use.id);
+            if (useBlock && HOISTABLE.has(use.type) && !use.frameState) {
+              if (use.type !== IR_LOAD_FIELD || !loadAliasesStore(use)) {
+                worklist.push({ node: use, block: useBlock });
+              }
+            }
           }
         }
       }
@@ -250,14 +262,26 @@ export function loopUnrolling(graph, findLoopsFn) {
     const dominators = computeDominators(graph);
     const canUseInPreHeader = (value) =>
       valueAvailableAtBlock(value, preHeader, nodeToBlock, dominators);
-    const peeledChecks = [];
+    const peeledNodes = [];
+    const peelableLoads = new Map();
+
+    for (const block of bodyBlocks) {
+      for (const node of block.nodes) {
+        if (node.type === IR_LOAD_FIELD && node.inputs.every(canUseInPreHeader)) {
+          peelableLoads.set(node.id, node);
+        }
+      }
+    }
+
+    const canResolveInput = (value) =>
+      canUseInPreHeader(value) || peelableLoads.has(value.id);
 
     for (const block of bodyBlocks) {
       for (const node of block.nodes) {
         if (node === headerTerm) continue;
         if (!isPeelableCheck(node)) continue;
         if (!node.frameState) continue;
-        if (!node.inputs.every(canUseInPreHeader)) continue;
+        if (!node.inputs.every(canResolveInput)) continue;
         if (
           !frameStateAvailableAtBlock(
             node.frameState,
@@ -267,25 +291,32 @@ export function loopUnrolling(graph, findLoopsFn) {
           )
         )
           continue;
-        peeledChecks.push(node);
+        for (const inp of node.inputs) {
+          if (peelableLoads.has(inp.id) && !peeledNodes.some((p) => p.original === inp)) {
+            peeledNodes.push({ original: inp, isLoad: true });
+          }
+        }
+        peeledNodes.push({ original: node, isLoad: false });
       }
     }
 
-    if (peeledChecks.length === 0) continue;
+    if (peeledNodes.length === 0) continue;
 
-    for (const check of peeledChecks) {
-      const peeled = new IRNode(check.type, { ...check.props });
-      for (const inp of check.inputs) {
-        peeled.addInput(inp);
+    const cloneMap = new Map();
+    for (const { original, isLoad } of peeledNodes) {
+      const peeled = new IRNode(original.type, { ...original.props });
+      for (const inp of original.inputs) {
+        peeled.addInput(cloneMap.get(inp.id) || inp);
       }
-      peeled.frameState = check.frameState;
+      if (original.frameState) peeled.frameState = original.frameState;
       preHeader.nodes.splice(insertIdx, 0, peeled);
       insertIdx++;
       peeled.block = preHeader;
+      cloneMap.set(original.id, peeled);
 
       tracer.jitCompile(
         graph.name,
-        `LoopUnroll: peeled ${check.type} v${check.id} into pre-header B${preHeader.id}`,
+        `LoopUnroll: peeled ${original.type} v${original.id} into pre-header B${preHeader.id}`,
       );
     }
 

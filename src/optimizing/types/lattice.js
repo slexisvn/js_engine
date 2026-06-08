@@ -167,6 +167,12 @@ export function narrowType(current, fact) {
   return neverType();
 }
 
+export function excludeType(current, excluded) {
+  if (!current || !excluded) return current || anyType();
+  if (isSubtype(current, excluded)) return neverType();
+  return current;
+}
+
 export function typeFromConstant(value) {
   if (value === null || value === undefined) return nullishType();
   if (typeof value === "string") return stringType();

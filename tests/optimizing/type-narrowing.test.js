@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { typeNarrowing } from "../../src/optimizing/passes/type-narrowing.js";
 import {
   CFGFunction,
+  IRNode,
   irConstant,
   irCheckSmi,
   irCheckNumber,
@@ -9,6 +10,7 @@ import {
   irGenericAdd,
   irGenericSub,
   irGenericCompare,
+  irInt32Compare,
   irReturn,
   irBranch,
   irJump,
@@ -19,6 +21,7 @@ import {
   IR_FLOAT64_SUB,
   IR_FLOAT64_COMPARE,
   IR_GENERIC_ADD,
+  IR_TYPEOF,
   resetIRNodeIds,
 } from "../../src/optimizing/ir/index.js";
 
@@ -196,6 +199,105 @@ describe("typeNarrowing", () => {
       typeNarrowing(graph);
 
       expect(add.type).toBe(IR_INT32_ADD);
+    });
+  });
+
+  describe("branch-based typeof narrowing", () => {
+    it("narrows true branch of typeof == 'number' to float64 arithmetic", () => {
+      const graph = new CFGFunction("test");
+      const b0 = graph.addBlock();
+      const bTrue = graph.addBlock();
+      const bFalse = graph.addBlock();
+
+      const p0 = graph.addParameter(0);
+      const p1 = graph.addParameter(1);
+
+      const typeofNode = new IRNode(IR_TYPEOF, {});
+      typeofNode.addInput(p0);
+      b0.addNode(typeofNode);
+      const strConst = irConstant("number");
+      b0.addNode(strConst);
+      const cmp = irInt32Compare("==", typeofNode, strConst);
+      b0.addNode(cmp);
+      b0.addSuccessor(bTrue);
+      b0.addSuccessor(bFalse);
+      b0.addNode(irBranch(cmp, bTrue, bFalse));
+
+      const check1 = irCheckSmi(p1);
+      bTrue.addNode(check1);
+      const add = irGenericAdd(p0, check1);
+      bTrue.addNode(add);
+      bTrue.addNode(irReturn(add));
+
+      bFalse.addNode(irReturn(irConstant(0)));
+
+      typeNarrowing(graph);
+
+      expect([IR_FLOAT64_ADD, IR_INT32_ADD]).toContain(add.type);
+    });
+
+    it("narrows true branch with === operator", () => {
+      const graph = new CFGFunction("test");
+      const b0 = graph.addBlock();
+      const bTrue = graph.addBlock();
+      const bFalse = graph.addBlock();
+
+      const p0 = graph.addParameter(0);
+      const p1 = graph.addParameter(1);
+
+      const typeofNode = new IRNode(IR_TYPEOF, {});
+      typeofNode.addInput(p0);
+      b0.addNode(typeofNode);
+      const strConst = irConstant("number");
+      b0.addNode(strConst);
+      const cmp = irInt32Compare("===", typeofNode, strConst);
+      b0.addNode(cmp);
+      b0.addSuccessor(bTrue);
+      b0.addSuccessor(bFalse);
+      b0.addNode(irBranch(cmp, bTrue, bFalse));
+
+      const check1 = irCheckSmi(p1);
+      bTrue.addNode(check1);
+      const add = irGenericAdd(p0, check1);
+      bTrue.addNode(add);
+      bTrue.addNode(irReturn(add));
+
+      bFalse.addNode(irReturn(irConstant(0)));
+
+      typeNarrowing(graph);
+
+      expect([IR_FLOAT64_ADD, IR_INT32_ADD]).toContain(add.type);
+    });
+
+    it("does not narrow false branch to the same type as true", () => {
+      const graph = new CFGFunction("test");
+      const b0 = graph.addBlock();
+      const bTrue = graph.addBlock();
+      const bFalse = graph.addBlock();
+
+      const p0 = graph.addParameter(0);
+      const p1 = graph.addParameter(1);
+
+      const typeofNode = new IRNode(IR_TYPEOF, {});
+      typeofNode.addInput(p0);
+      b0.addNode(typeofNode);
+      const strConst = irConstant("number");
+      b0.addNode(strConst);
+      const cmp = irInt32Compare("==", typeofNode, strConst);
+      b0.addNode(cmp);
+      b0.addSuccessor(bTrue);
+      b0.addSuccessor(bFalse);
+      b0.addNode(irBranch(cmp, bTrue, bFalse));
+
+      bTrue.addNode(irReturn(irConstant(1)));
+
+      const add = irGenericAdd(p0, p1);
+      bFalse.addNode(add);
+      bFalse.addNode(irReturn(add));
+
+      typeNarrowing(graph);
+
+      expect(add.type).toBe(IR_GENERIC_ADD);
     });
   });
 });

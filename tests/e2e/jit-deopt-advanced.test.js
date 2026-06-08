@@ -953,3 +953,94 @@ describe("E2E: stale callMode recovery after deopt", () => {
     expect(r.value).toBe(5050);
   });
 });
+
+describe("E2E: optimizer improvements", () => {
+  let engine;
+  beforeEach(() => { engine = jitEngine(); });
+
+  it("property store does not break map check (P1)", () => {
+    const r = engine.runValue(`
+      function f(o) { o.x = 10; o.y = 20; return o.x + o.y; }
+      var obj = { x: 0, y: 0 };
+      for (var i = 0; i < 10; i++) f(obj);
+      f(obj);
+    `);
+    expect(r.value).toBe(30);
+  });
+
+  it("typeof narrowing in true branch (P2)", () => {
+    const r = engine.runValue(`
+      function add(a, b) {
+        if (typeof a === "number") return a + b;
+        return 0;
+      }
+      for (var i = 0; i < 10; i++) add(i, i);
+      add(7, 3);
+    `);
+    expect(r.value).toBe(10);
+  });
+
+  it("typeof narrowing false branch returns non-number path (P2)", () => {
+    const r = engine.runValue(`
+      function check(x) {
+        if (typeof x === "number") return x * 2;
+        return -1;
+      }
+      for (var i = 0; i < 10; i++) check(i);
+      check("hello");
+    `);
+    expect(r.value).toBe(-1);
+  });
+
+  it("escape analysis scalar replaces local object (P3)", () => {
+    const r = engine.runValue(`
+      function point(x, y) {
+        var p = { x: x, y: y };
+        return p.x + p.y;
+      }
+      for (var i = 0; i < 10; i++) point(i, i);
+      point(15, 25);
+    `);
+    expect(r.value).toBe(40);
+  });
+
+  it("diamond CFG does not leak stores between branches (P3)", () => {
+    const r = engine.runValue(`
+      function f(cond) {
+        var a = 0;
+        if (cond) { a = 42; } else { a = 99; }
+        return a;
+      }
+      for (var i = 0; i < 10; i++) f(i % 2 === 0);
+      f(false);
+    `);
+    expect(r.value).toBe(99);
+  });
+
+  it("loop with invariant check hoists correctly (P5)", () => {
+    const r = engine.runValue(`
+      function sumArr(arr) {
+        var s = 0;
+        for (var i = 0; i < arr.length; i++) s = s + arr[i];
+        return s;
+      }
+      var a = [1, 2, 3, 4, 5];
+      for (var i = 0; i < 10; i++) sumArr(a);
+      sumArr(a);
+    `);
+    expect(r.value).toBe(15);
+  });
+
+  it("pure Math operations do not invalidate loads (P4)", () => {
+    const r = engine.runValue(`
+      function f(x) {
+        var o = { val: x };
+        var y = Math.abs(x);
+        return o.val + y;
+      }
+      for (var i = 0; i < 10; i++) f(i);
+      f(5);
+    `);
+    expect(r.value).toBe(10);
+  });
+});

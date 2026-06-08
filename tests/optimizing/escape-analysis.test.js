@@ -12,6 +12,8 @@ import {
   irGenericCall,
   irInt32Add,
   irReturn,
+  irJump,
+  irBranch,
   IR_NEW_OBJECT,
   IR_GENERIC_SET_PROP,
   IR_GENERIC_GET_PROP,
@@ -127,5 +129,65 @@ describe("escapeAnalysisAndScalarReplacement", () => {
     block.addNode(ret);
     const count = escapeAnalysisAndScalarReplacement(graph);
     expect(count).toBe(1);
+  });
+
+  it("does not leak store from sibling block in diamond CFG", () => {
+    const graph = new CFGFunction("test");
+    const b0 = graph.addBlock();
+    const bTrue = graph.addBlock();
+    const bFalse = graph.addBlock();
+    const bMerge = graph.addBlock();
+
+    const alloc = irNewObject();
+    b0.addNode(alloc);
+    const cond = irConstant(1);
+    b0.addNode(cond);
+    b0.addSuccessor(bTrue);
+    b0.addSuccessor(bFalse);
+    b0.addNode(irBranch(cond, bTrue, bFalse));
+
+    const val = irConstant(42);
+    bTrue.addNode(val);
+    const store = irStoreField(alloc, 0, val);
+    bTrue.addNode(store);
+    bTrue.addSuccessor(bMerge);
+    bTrue.addNode(irJump(bMerge));
+
+    const load = irLoadField(alloc, 0);
+    bFalse.addNode(load);
+    bFalse.addSuccessor(bMerge);
+    bFalse.addNode(irJump(bMerge));
+
+    const ret = irReturn(irConstant(0));
+    bMerge.addNode(ret);
+
+    escapeAnalysisAndScalarReplacement(graph);
+    const falseHasLoad = bFalse.nodes.some(n => n.type === IR_LOAD_FIELD);
+    const falseHasUndefined = bFalse.nodes.some(n => n.type === IR_CONSTANT && n.props.value === undefined);
+    expect(falseHasLoad || falseHasUndefined).toBe(true);
+  });
+
+  it("propagates store to dominated block correctly", () => {
+    const graph = new CFGFunction("test");
+    const b0 = graph.addBlock();
+    const b1 = graph.addBlock();
+
+    const alloc = irNewObject();
+    b0.addNode(alloc);
+    const val = irConstant(77);
+    b0.addNode(val);
+    const store = irStoreField(alloc, 0, val);
+    b0.addNode(store);
+    b0.addSuccessor(b1);
+    b0.addNode(irJump(b1));
+
+    const load = irLoadField(alloc, 0);
+    b1.addNode(load);
+    const ret = irReturn(load);
+    b1.addNode(ret);
+
+    const count = escapeAnalysisAndScalarReplacement(graph);
+    expect(count).toBe(1);
+    expect(ret.inputs[0].props.value).toBe(77);
   });
 });

@@ -149,7 +149,8 @@ export function loadElimination(graph) {
       }
 
       if (CALL_LIKE.has(node.type)) {
-        for (const [oid] of state) {
+        if (node.props && node.props.pure) continue;
+        for (const oid of [...state.keys()]) {
           if (freshAllocations.has(oid) && !escapedAllocations.has(oid)) {
             continue;
           }
@@ -161,9 +162,9 @@ export function loadElimination(graph) {
       if (ARBITRARY_WRITE.has(node.type)) {
         const obj = node.inputs[0];
         if (obj) {
-          for (const [oid] of state) {
-            if (!definiteNoAlias(oid, obj.id)) {
-              stateDeleteObj(state, oid);
+          for (const key of [...state.keys()]) {
+            if (!definiteNoAlias(key, obj.id)) {
+              stateDeleteObj(state, key);
             }
           }
         } else {

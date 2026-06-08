@@ -160,4 +160,46 @@ describe("loadElimination", () => {
     expect(count).toBe(1);
     expect(ret.inputs[0]).toBe(val);
   });
+
+  it("preserves load state across pure call", () => {
+    const graph = new CFGFunction("test");
+    const block = graph.addBlock();
+    const obj = graph.addParameter(0);
+    const val = irConstant(42);
+    block.addNode(val);
+    const store = irStoreField(obj, 0, val);
+    block.addNode(store);
+    const callee = irConstant("pureBuiltin");
+    block.addNode(callee);
+    const call = irGenericCall(callee, []);
+    call.props.pure = true;
+    block.addNode(call);
+    const load = irLoadField(obj, 0);
+    block.addNode(load);
+    const ret = irReturn(load);
+    block.addNode(ret);
+    const count = loadElimination(graph);
+    expect(count).toBe(1);
+    expect(ret.inputs[0]).toBe(val);
+  });
+
+  it("invalidates load state across non-pure call for non-fresh objects", () => {
+    const graph = new CFGFunction("test");
+    const block = graph.addBlock();
+    const obj = graph.addParameter(0);
+    const val = irConstant(42);
+    block.addNode(val);
+    const store = irStoreField(obj, 0, val);
+    block.addNode(store);
+    const callee = irConstant("fn");
+    block.addNode(callee);
+    const call = irGenericCall(callee, []);
+    block.addNode(call);
+    const load = irLoadField(obj, 0);
+    block.addNode(load);
+    const ret = irReturn(load);
+    block.addNode(ret);
+    const count = loadElimination(graph);
+    expect(count).toBe(0);
+  });
 });

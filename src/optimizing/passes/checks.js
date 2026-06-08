@@ -116,28 +116,9 @@ export function eliminateRedundantChecks(graph) {
 
   const walkBlock = (block, inherited) => {
     const seenChecks = new Map(inherited);
-    const objIdToKeys = new Map();
-    for (const [key] of seenChecks) {
-      const match = key.match(/^map_(\d+)_/);
-      if (match) {
-        const oid = match[1];
-        if (!objIdToKeys.has(oid)) objIdToKeys.set(oid, new Set());
-        objIdToKeys.get(oid).add(key);
-      }
-    }
     const toRemove = [];
 
     for (const node of block.nodes) {
-      if (node.type === IR_STORE_FIELD && node.inputs[0]) {
-        const objId = String(node.inputs[0].id);
-        const keys = objIdToKeys.get(objId);
-        if (keys) {
-          for (const key of keys) seenChecks.delete(key);
-          objIdToKeys.delete(objId);
-        }
-        continue;
-      }
-
       const key = checkKey(node);
       if (key !== null) {
         if (seenChecks.has(key)) {
@@ -148,12 +129,6 @@ export function eliminateRedundantChecks(graph) {
           elimCount++;
         } else {
           seenChecks.set(key, node);
-          const match = key.match(/^map_(\d+)_/);
-          if (match) {
-            const oid = match[1];
-            if (!objIdToKeys.has(oid)) objIdToKeys.set(oid, new Set());
-            objIdToKeys.get(oid).add(key);
-          }
         }
       }
     }
@@ -572,37 +547,28 @@ export function rangeAnalysisAndBoundsCheckElimination(graph) {
     return { phi: phiNode, initNode, stepNode, stepInc, initRange, stepRange };
   }
 
-  function findLoopGuard(iv, arrayNode) {
-    for (const b of graph.blocks) {
-      const term = b.nodes[b.nodes.length - 1];
-      if (!term || term.type !== IR_BRANCH || !term.inputs[0]) continue;
-      const cmp = term.inputs[0];
-      if (cmp.type !== IR_INT32_COMPARE && cmp.type !== IR_FLOAT64_COMPARE)
-        continue;
-      if (cmp.inputs.length < 2) continue;
-
-      if (cmp.inputs[0] !== iv.phi) continue;
-      if (cmp.props.op !== "<" && cmp.props.op !== "<=") continue;
-
-      const bound = cmp.inputs[1];
-
-      let boundRelated = false;
-
-      if (bound.type === "LoadArrayLength" && bound.inputs[0] === arrayNode) {
-        boundRelated = true;
-      } else if (bound.type === "LoadArrayLength") {
-        boundRelated = true;
-      } else {
-        const boundRange = getRange(bound.id);
-        if (boundRange.max < INF) {
-          boundRelated = true;
-        }
-      }
-
-      if (boundRelated) {
-        return { guardBlock: b, cmp, bound, op: cmp.props.op };
-      }
+  const loopGuardIndex = new Map();
+  for (const b of graph.blocks) {
+    const term = b.nodes[b.nodes.length - 1];
+    if (!term || term.type !== IR_BRANCH || !term.inputs[0]) continue;
+    const cmp = term.inputs[0];
+    if (cmp.type !== IR_INT32_COMPARE && cmp.type !== IR_FLOAT64_COMPARE)
+      continue;
+    if (cmp.inputs.length < 2) continue;
+    if (cmp.props.op !== "<" && cmp.props.op !== "<=") continue;
+    const phiId = cmp.inputs[0].id;
+    if (!loopGuardIndex.has(phiId)) {
+      loopGuardIndex.set(phiId, { guardBlock: b, cmp, bound: cmp.inputs[1], op: cmp.props.op });
     }
+  }
+
+  function findLoopGuard(iv) {
+    const entry = loopGuardIndex.get(iv.phi.id);
+    if (!entry) return null;
+    const { bound } = entry;
+    if (bound.type === "LoadArrayLength") return entry;
+    const boundRange = getRange(bound.id);
+    if (boundRange.max < INF) return entry;
     return null;
   }
 
@@ -657,7 +623,7 @@ export function rangeAnalysisAndBoundsCheckElimination(graph) {
         if (!bounded) {
           const iv = detectInductionVariable(indexNode);
           if (iv) {
-            const guard = findLoopGuard(iv, arrayNode);
+            const guard = findLoopGuard(iv);
             if (guard) {
               bounded = true;
               tracer.jitCompile(
