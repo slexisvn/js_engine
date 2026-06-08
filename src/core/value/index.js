@@ -13,26 +13,27 @@ export const TAG_SYMBOL = "symbol";
 export const TAG_UNDEFINED = "undefined";
 export const TAG_NULL = "null";
 
-const SMI_MAX = 0x3fffffff;
-const SMI_MIN = -0x40000000;
-const TAG_BITS = 4;
-const TAG_MASK = 0xf;
+export const SMI_MAX = 0x3fffffff;
+export const SMI_MIN = -0x40000000;
+export const TAG_BITS = 4;
+export const TAG_MASK = 0xf;
 
-const CODE_SMI = 0;
-const CODE_FALSE = 1;
-const CODE_TRUE = 2;
-const CODE_UNDEFINED = 3;
-const CODE_NULL = 4;
-const CODE_DOUBLE = 5;
-const CODE_STRING = 6;
-const CODE_OBJECT = 7;
-const CODE_FUNCTION = 8;
-const CODE_ARRAY = 9;
-const CODE_PROMISE = 10;
-const CODE_ITERATOR = 11;
-const CODE_GENERATOR = 12;
-const CODE_REGEX = 13;
-const CODE_SYMBOL = 14;
+export const CODE_SMI = 0;
+export const CODE_FALSE = 1;
+export const CODE_TRUE = 2;
+export const CODE_UNDEFINED = 3;
+export const CODE_NULL = 4;
+export const CODE_DOUBLE = 5;
+export const CODE_STRING = 6;
+export const CODE_OBJECT = 7;
+export const CODE_FUNCTION = 8;
+export const CODE_ARRAY = 9;
+export const CODE_PROMISE = 10;
+export const CODE_ITERATOR = 11;
+export const CODE_GENERATOR = 12;
+export const CODE_REGEX = 13;
+export const CODE_SYMBOL = 14;
+export const CODE_MAX = CODE_SYMBOL;
 
 const CODE_TO_TAG = [
   TAG_SMI,
@@ -69,13 +70,13 @@ const heapPayloads = [null];
 const heapFreeList = [];
 const pinnedHeapIds = new Set();
 
-function codeOf(v) {
+export function codeOf(v) {
   if (typeof v !== "number") return CODE_UNDEFINED;
-  return ((v % (1 << TAG_BITS)) + (1 << TAG_BITS)) & TAG_MASK;
+  return v & TAG_MASK;
 }
 
 function heapId(v) {
-  return Math.trunc((v - codeOf(v)) / (1 << TAG_BITS));
+  return (v - (v & TAG_MASK)) * TAG_SHIFT_DIV;
 }
 
 function heapValue(tag, payload) {
@@ -88,12 +89,13 @@ function heapValue(tag, payload) {
     id = heapPayloads.length;
     heapPayloads.push(payload);
   }
-  return id * (1 << TAG_BITS) + code;
+  return id * TAG_SHIFT_MULT + code;
 }
 
+const TAG_SHIFT_MULT = 1 << TAG_BITS;
+
 export function mkSmi(n) {
-  const v = n | 0;
-  return v * (1 << TAG_BITS) + CODE_SMI;
+  return (n | 0) * TAG_SHIFT_MULT;
 }
 
 export function mkDouble(n) {
@@ -160,10 +162,17 @@ export function getTag(v) {
   return CODE_TO_TAG[codeOf(v)] || TAG_UNDEFINED;
 }
 
+const TAG_SHIFT_DIV = 1 / TAG_SHIFT_MULT;
+
+export function smiPayload(v) {
+  return v * TAG_SHIFT_DIV;
+}
+
 export function getPayload(v) {
-  switch (codeOf(v)) {
+  const code = v & TAG_MASK;
+  switch (code) {
     case CODE_SMI:
-      return Math.trunc(v / (1 << TAG_BITS));
+      return v * TAG_SHIFT_DIV;
     case CODE_FALSE:
       return false;
     case CODE_TRUE:
@@ -182,7 +191,7 @@ export function getPayload(v) {
     case CODE_GENERATOR:
     case CODE_REGEX:
     case CODE_SYMBOL:
-      return heapPayloads[heapId(v)];
+      return heapPayloads[(v - code) * TAG_SHIFT_DIV];
     default:
       return undefined;
   }
@@ -190,8 +199,8 @@ export function getPayload(v) {
 
 export function isTaggedValue(v) {
   if (typeof v !== "number" || !Number.isFinite(v)) return false;
-  const code = codeOf(v);
-  if (code === CODE_SMI) return Number.isInteger(v / (1 << TAG_BITS));
+  const code = v & TAG_MASK;
+  if (code === CODE_SMI) return Number.isInteger(v * TAG_SHIFT_DIV);
   if (
     code === CODE_FALSE ||
     code === CODE_TRUE ||
@@ -199,66 +208,70 @@ export function isTaggedValue(v) {
     code === CODE_NULL
   )
     return v === code;
-  const id = heapId(v);
+  const id = (v - code) * TAG_SHIFT_DIV;
   return id > 0 && id < heapPayloads.length && heapPayloads[id] !== undefined;
 }
 
 export function isSmi(v) {
-  return codeOf(v) === CODE_SMI;
+  return typeof v === "number" && (v & TAG_MASK) === CODE_SMI;
 }
 export function isDouble(v) {
-  return codeOf(v) === CODE_DOUBLE;
+  return typeof v === "number" && (v & TAG_MASK) === CODE_DOUBLE;
 }
 export function isNumber(v) {
-  return isSmi(v) || isDouble(v);
+  if (typeof v !== "number") return false;
+  const code = v & TAG_MASK;
+  return code === CODE_SMI || code === CODE_DOUBLE;
 }
 export function isBool(v) {
-  return codeOf(v) === CODE_FALSE || codeOf(v) === CODE_TRUE;
+  return v === CODE_TRUE || v === CODE_FALSE;
 }
 export function isString(v) {
-  return codeOf(v) === CODE_STRING;
+  return typeof v === "number" && (v & TAG_MASK) === CODE_STRING;
 }
 export function isObject(v) {
-  return codeOf(v) === CODE_OBJECT;
+  return typeof v === "number" && (v & TAG_MASK) === CODE_OBJECT;
 }
 export function isFunction(v) {
-  return codeOf(v) === CODE_FUNCTION;
+  return typeof v === "number" && (v & TAG_MASK) === CODE_FUNCTION;
 }
 export function isArray(v) {
-  return codeOf(v) === CODE_ARRAY;
+  return typeof v === "number" && (v & TAG_MASK) === CODE_ARRAY;
 }
 export function isPromise(v) {
-  return codeOf(v) === CODE_PROMISE;
+  return typeof v === "number" && (v & TAG_MASK) === CODE_PROMISE;
 }
 export function isIterator(v) {
-  return codeOf(v) === CODE_ITERATOR;
+  return typeof v === "number" && (v & TAG_MASK) === CODE_ITERATOR;
 }
 export function isGenerator(v) {
-  return codeOf(v) === CODE_GENERATOR;
+  return typeof v === "number" && (v & TAG_MASK) === CODE_GENERATOR;
 }
 export function isRegex(v) {
-  return codeOf(v) === CODE_REGEX;
+  return typeof v === "number" && (v & TAG_MASK) === CODE_REGEX;
 }
 export function isSymbol(v) {
-  return codeOf(v) === CODE_SYMBOL;
+  return typeof v === "number" && (v & TAG_MASK) === CODE_SYMBOL;
 }
 export function isUndefined(v) {
-  return codeOf(v) === CODE_UNDEFINED;
+  return v === CODE_UNDEFINED;
 }
 export function isNull(v) {
-  return codeOf(v) === CODE_NULL;
+  return v === CODE_NULL;
 }
 export function isNullish(v) {
-  return isNull(v) || isUndefined(v);
+  return v === CODE_NULL || v === CODE_UNDEFINED;
+}
+export function areBothSmi(a, b) {
+  return typeof a === "number" && typeof b === "number" && ((a | b) & TAG_MASK) === 0;
+}
+export function areBothNumber(a, b) {
+  if (typeof a !== "number" || typeof b !== "number") return false;
+  const ac = a & TAG_MASK;
+  const bc = b & TAG_MASK;
+  return (ac === CODE_SMI || ac === CODE_DOUBLE) && (bc === CODE_SMI || bc === CODE_DOUBLE);
 }
 
-/**
- * ToPrimitive abstract operation (simplified).
- * For objects/arrays, attempts to call valueOf() or toString() on the JSObject payload.
- * Returns a tagged primitive value, or the original if no conversion possible.
- * Note: For full spec compliance with user-defined valueOf/toString, the interpreter
- * handles calling those methods. This handles the built-in JSObject conversions.
- */
 export function toPrimitive(v, hint = "default") {
   const code = codeOf(v);
   if (code !== CODE_OBJECT && code !== CODE_ARRAY) return v;
@@ -445,10 +458,6 @@ export function typeOf(v) {
   }
 }
 
-/**
- * Abstract Equality Comparison (==) per ES spec.
- * Returns a JS boolean (true/false), not a tagged value.
- */
 export function abstractLooseEqual(x, y) {
   const xc = codeOf(x);
   const yc = codeOf(y);
@@ -525,32 +534,16 @@ export function strictEqual(a, b) {
 }
 
 export function isPrimitive(v) {
-  switch (codeOf(v)) {
-    case CODE_SMI:
-    case CODE_DOUBLE:
-    case CODE_FALSE:
-    case CODE_TRUE:
-    case CODE_STRING:
-    case CODE_SYMBOL:
-    case CODE_NULL:
-    case CODE_UNDEFINED:
-      return true;
-    default:
-      return false;
-  }
+  if (typeof v !== "number") return true;
+  const code = v & TAG_MASK;
+  return code <= CODE_STRING || code === CODE_SYMBOL;
 }
 
 export function getHeapId(v) {
-  const code = codeOf(v);
-  if (
-    code === CODE_SMI ||
-    code === CODE_FALSE ||
-    code === CODE_TRUE ||
-    code === CODE_UNDEFINED ||
-    code === CODE_NULL
-  )
-    return -1;
-  return heapId(v);
+  if (typeof v !== "number") return -1;
+  const code = v & TAG_MASK;
+  if (code <= CODE_NULL) return -1;
+  return (v - code) * TAG_SHIFT_DIV;
 }
 
 export function pinHeapSlot(v) {

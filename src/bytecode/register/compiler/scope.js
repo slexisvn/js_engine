@@ -62,7 +62,14 @@ export const scopeMethods = {
         break;
       }
       case NodeType.VarDeclaration: {
-        this._declareLocal(node.name, "var");
+        if (this.scope.isScript) {
+          if (!this.func.hoistedVarNames) this.func.hoistedVarNames = [];
+          if (!this.func.hoistedVarNames.includes(node.name)) {
+            this.func.hoistedVarNames.push(node.name);
+          }
+        } else {
+          this._declareLocal(node.name, "var");
+        }
         break;
       }
       case NodeType.FunctionDeclaration:
@@ -76,19 +83,33 @@ export const scopeMethods = {
         this._declareLocal("_keys$", "var");
         this._declareLocal("_i$", "var");
         this._declareLocal("_len$", "var");
-        this._declareLocal(
-          node.variable,
-          node.kind === "const" ? "const" : node.kind === "var" ? "var" : "let",
-        );
+        if (this.scope.isScript && node.kind === "var") {
+          if (!this.func.hoistedVarNames) this.func.hoistedVarNames = [];
+          if (!this.func.hoistedVarNames.includes(node.variable)) {
+            this.func.hoistedVarNames.push(node.variable);
+          }
+        } else {
+          this._declareLocal(
+            node.variable,
+            node.kind === "const" ? "const" : node.kind === "var" ? "var" : "let",
+          );
+        }
         break;
       }
       case NodeType.ForOfStatement: {
         this._declareLocal("_iter$", "var");
         this._declareLocal("_iterResult$", "var");
-        this._declareLocal(
-          node.variable,
-          node.kind === "const" ? "const" : node.kind === "var" ? "var" : "let",
-        );
+        if (this.scope.isScript && node.kind === "var") {
+          if (!this.func.hoistedVarNames) this.func.hoistedVarNames = [];
+          if (!this.func.hoistedVarNames.includes(node.variable)) {
+            this.func.hoistedVarNames.push(node.variable);
+          }
+        } else {
+          this._declareLocal(
+            node.variable,
+            node.kind === "const" ? "const" : node.kind === "var" ? "var" : "let",
+          );
+        }
         break;
       }
       case NodeType.ObjectDestructuring: {
@@ -111,7 +132,7 @@ export const scopeMethods = {
           node.init &&
           (node.init.type === NodeType.LetDeclaration ||
             node.init.type === NodeType.ConstDeclaration ||
-            node.init.type === NodeType.VarDeclaration)
+            (node.init.type === NodeType.VarDeclaration && !this.scope.isScript))
         ) {
           this._declareLocal(
             node.init.name,
@@ -150,7 +171,12 @@ export const scopeMethods = {
       case NodeType.EmptyStatement:
         break;
       case NodeType.VarDeclaration: {
-        if (!this.scope.locals.has(node.name)) {
+        if (this.scope.isScript) {
+          if (!this.func.hoistedVarNames) this.func.hoistedVarNames = [];
+          if (!this.func.hoistedVarNames.includes(node.name)) {
+            this.func.hoistedVarNames.push(node.name);
+          }
+        } else if (!this.scope.locals.has(node.name)) {
           this._declareLocal(node.name, "var");
         }
         break;

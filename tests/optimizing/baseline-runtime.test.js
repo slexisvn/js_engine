@@ -16,9 +16,11 @@ import {
   isDouble,
   isBool,
   isString,
+  isFunction,
   toNumber,
 } from "../../src/core/value/index.js";
 import { createJSObject, createJSArray } from "../../src/objects/heap/factory.js";
+import { MiniJIT } from "../../src/api/engine.js";
 
 function makeRuntime() {
   const fn = new RegisterCompiledFunction("test", 0);
@@ -291,6 +293,115 @@ describe("BaselineRuntime", () => {
       const native = re.nativeRegex || re;
       expect(native.source).toBe("abc");
       expect(native.flags).toBe("g");
+    });
+  });
+});
+
+describe("BaselineRuntime gp() prototype and property lookups", () => {
+  function makeEngineRuntime(constantNames) {
+    const engine = new MiniJIT();
+    engine.run("0;");
+    const fn = new RegisterCompiledFunction("gpTest", 0);
+    fn.constants = constantNames;
+    fn.feedbackVector = null;
+    return new BaselineRuntime(fn, engine.interpreter);
+  }
+
+  describe("array prototype methods", () => {
+    it("resolves push on an array", () => {
+      const rt = makeEngineRuntime(["push"]);
+      const arr = mkArray(createJSArray([mkSmi(1)]));
+      const result = rt.gp(arr, 0, 0);
+      expect(isFunction(result)).toBe(true);
+    });
+
+    it("resolves slice on an array", () => {
+      const rt = makeEngineRuntime(["slice"]);
+      const arr = mkArray(createJSArray([mkSmi(1), mkSmi(2)]));
+      const result = rt.gp(arr, 0, 0);
+      expect(isFunction(result)).toBe(true);
+    });
+
+    it("resolves join on an array", () => {
+      const rt = makeEngineRuntime(["join"]);
+      const arr = mkArray(createJSArray([]));
+      const result = rt.gp(arr, 0, 0);
+      expect(isFunction(result)).toBe(true);
+    });
+
+    it("returns length as smi for arrays", () => {
+      const rt = makeEngineRuntime(["length"]);
+      const arr = mkArray(createJSArray([mkSmi(1), mkSmi(2), mkSmi(3)]));
+      const result = rt.gp(arr, 0, 0);
+      expect(isSmi(result)).toBe(true);
+      expect(getPayload(result)).toBe(3);
+    });
+
+    it("returns element by numeric index string", () => {
+      const rt = makeEngineRuntime(["1"]);
+      const arr = mkArray(createJSArray([mkSmi(10), mkSmi(20)]));
+      const result = rt.gp(arr, 0, 0);
+      expect(getPayload(result)).toBe(20);
+    });
+  });
+
+  describe("string prototype methods", () => {
+    it("resolves charAt on a string", () => {
+      const rt = makeEngineRuntime(["charAt"]);
+      const str = mkString("hello");
+      const result = rt.gp(str, 0, 0);
+      expect(isFunction(result)).toBe(true);
+    });
+
+    it("resolves indexOf on a string", () => {
+      const rt = makeEngineRuntime(["indexOf"]);
+      const str = mkString("abc");
+      const result = rt.gp(str, 0, 0);
+      expect(isFunction(result)).toBe(true);
+    });
+
+    it("returns length as smi for strings", () => {
+      const rt = makeEngineRuntime(["length"]);
+      const str = mkString("hello");
+      const result = rt.gp(str, 0, 0);
+      expect(isSmi(result)).toBe(true);
+      expect(getPayload(result)).toBe(5);
+    });
+
+    it("returns character by numeric index string", () => {
+      const rt = makeEngineRuntime(["2"]);
+      const str = mkString("abc");
+      const result = rt.gp(str, 0, 0);
+      expect(isString(result)).toBe(true);
+      expect(getPayload(result)).toBe("c");
+    });
+  });
+
+  describe("function property access", () => {
+    it("resolves own properties on a function object", () => {
+      const rt = makeEngineRuntime(["myProp"]);
+      const fn = { name: "test", properties: { myProp: mkSmi(42) } };
+      const tagged = mkFunction(fn);
+      const result = rt.gp(tagged, 0, 0);
+      expect(isSmi(result)).toBe(true);
+      expect(getPayload(result)).toBe(42);
+    });
+
+    it("returns undefined for missing function properties", () => {
+      const rt = makeEngineRuntime(["missing"]);
+      const fn = { name: "test", properties: {} };
+      const tagged = mkFunction(fn);
+      const result = rt.gp(tagged, 0, 0);
+      expect(getPayload(result)).toBeUndefined();
+    });
+
+    it("auto-creates prototype property on a function", () => {
+      const rt = makeEngineRuntime(["prototype"]);
+      const fn = { name: "Ctor", properties: {} };
+      const tagged = mkFunction(fn);
+      const result = rt.gp(tagged, 0, 0);
+      expect(getPayload(result)).toBeDefined();
+      expect(fn.prototypeObj).toBeDefined();
     });
   });
 });

@@ -10,7 +10,7 @@ vi.mock("../../src/bytecode/register/interpreter/index.js", () => {
       this.pc = 0;
     }
   }
-  return { RegisterFrame: MockRegisterFrame, MAX_DEOPT_COUNT: 3 };
+  return { RegisterFrame: MockRegisterFrame, MAX_DEOPT_COUNT: 3, updateCallMode: () => {} };
 });
 
 import { Deoptimizer } from "../../src/deopt/deoptimizer.js";

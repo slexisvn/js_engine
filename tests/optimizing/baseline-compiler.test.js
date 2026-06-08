@@ -63,12 +63,12 @@ describe("BaselineCompiler", () => {
       expect(compiler.compile(fn, makeMockInterpreter())).toBeNull();
     });
 
-    it("rejects functions containing ROP_CALL_METHOD", () => {
+    it("compiles functions containing ROP_CALL_METHOD", () => {
       const fn = makeSimpleFn("method", [
         new RegisterInstruction(ROP_CALL_METHOD, 0, 0, 0, 0),
         new RegisterInstruction(ROP_RETURN),
       ]);
-      expect(compiler.compile(fn, makeMockInterpreter())).toBeNull();
+      expect(compiler.compile(fn, makeMockInterpreter())).not.toBeNull();
     });
 
     it("rejects functions containing try/throw", () => {

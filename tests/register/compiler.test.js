@@ -122,11 +122,21 @@ describe("RegisterBytecodeCompiler", () => {
     it("emits LDA_REG for local variable", () => {
       const func = compiler.compile(
         Program([
-          VarDeclaration("x", Literal(10, "number")),
+          LetDeclaration("x", Literal(10, "number")),
           ExpressionStatement(Identifier("x")),
         ]),
       );
       expect(ops(func)).toContain(bytecode.ROP_LDA_REG);
+    });
+
+    it("emits LDA_GLOBAL for script-scope var", () => {
+      const func = compiler.compile(
+        Program([
+          VarDeclaration("x", Literal(10, "number")),
+          ExpressionStatement(Identifier("x")),
+        ]),
+      );
+      expect(ops(func)).toContain(bytecode.ROP_LDA_GLOBAL);
     });
   });
 
@@ -332,17 +342,24 @@ describe("RegisterBytecodeCompiler", () => {
     it("binding kind recorded correctly per declaration type", () => {
       const func = compiler.compile(
         Program([
-          VarDeclaration("a", Literal(1, "number")),
           LetDeclaration("b", Literal(2, "number")),
           ConstDeclaration("c", Literal(3, "number")),
         ]),
       );
-      const aIdx = func.localNames.indexOf("a");
       const bIdx = func.localNames.indexOf("b");
       const cIdx = func.localNames.indexOf("c");
-      expect(func.localBindingKinds[aIdx]).toBe("var");
       expect(func.localBindingKinds[bIdx]).toBe("let");
       expect(func.localBindingKinds[cIdx]).toBe("const");
+    });
+
+    it("script-scope var uses global cells not locals", () => {
+      const func = compiler.compile(
+        Program([
+          VarDeclaration("a", Literal(1, "number")),
+        ]),
+      );
+      expect(func.localNames.indexOf("a")).toBe(-1);
+      expect(ops(func)).toContain(bytecode.ROP_STA_GLOBAL);
     });
   });
 
@@ -707,7 +724,7 @@ describe("RegisterBytecodeCompiler", () => {
     it("compiles function declaration with upvalue as MAKE_CLOSURE", () => {
       const func = compiler.compile(
         Program([
-          VarDeclaration("x", Literal(1, "number")),
+          LetDeclaration("x", Literal(1, "number")),
           FunctionDeclaration(
             "getX",
             [],
@@ -850,7 +867,7 @@ describe("RegisterBytecodeCompiler", () => {
     it("creates new scope for block statements", () => {
       const func = compiler.compile(
         Program([
-          VarDeclaration("x", Literal(1, "number")),
+          LetDeclaration("x", Literal(1, "number")),
           BlockStatement([
             LetDeclaration("y", Literal(2, "number")),
             ExpressionStatement(Identifier("y")),
@@ -864,7 +881,7 @@ describe("RegisterBytecodeCompiler", () => {
     it("outer variable accessible in inner block", () => {
       const func = compiler.compile(
         Program([
-          VarDeclaration("x", Literal(1, "number")),
+          LetDeclaration("x", Literal(1, "number")),
           BlockStatement([ExpressionStatement(Identifier("x"))]),
         ]),
       );
@@ -876,9 +893,9 @@ describe("RegisterBytecodeCompiler", () => {
     it("registerCount grows with locals", () => {
       const func = compiler.compile(
         Program([
-          VarDeclaration("a", Literal(1, "number")),
-          VarDeclaration("b", Literal(2, "number")),
-          VarDeclaration("c", Literal(3, "number")),
+          LetDeclaration("a", Literal(1, "number")),
+          LetDeclaration("b", Literal(2, "number")),
+          LetDeclaration("c", Literal(3, "number")),
         ]),
       );
       expect(func.registerCount).toBeGreaterThanOrEqual(3);

@@ -3,14 +3,13 @@ import { tracer } from "../../core/tracing/index.js";
 import { BaselineRuntime } from "./runtime.js";
 
 export { BaselineRuntime } from "./runtime.js";
-export const BASELINE_THRESHOLD = 20;
+import { DEFAULT_TIERING_POLICY } from "../../runtime/tiering/policy.js";
+export const BASELINE_THRESHOLD = DEFAULT_TIERING_POLICY.baselineThreshold;
 
 export class BaselineCompiler {
   compile(compiledFn, interpreter) {
     const instrs = compiledFn.instructions;
     if (instrs.length === 0 || instrs.length > 1000) return null;
-    if (instrs.some((instr) => instr.opcode === bytecode.ROP_CALL_METHOD))
-      return null;
     if (
       instrs.some(
         (instr) =>
@@ -233,9 +232,9 @@ export class BaselineCompiler {
 
       case bytecode.ROP_CALL_METHOD: {
         const receiverReg = o[0];
-        const arg0Reg = o[2];
-        const argCount = o[3];
-        const fbSlot = o.length > 4 ? o[4] : 0;
+        const arg0Reg = o[1];
+        const argCount = o[2];
+        const fbSlot = o.length > 3 ? o[3] : 0;
         let argArr = "";
         for (let i = 0; i < argCount; i++) {
           if (i > 0) argArr += ",";

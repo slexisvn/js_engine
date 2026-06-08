@@ -2575,6 +2575,7 @@ export class WasmCodegen {
             }
             else if (v && typeof v === "object" && v._tag !== undefined)
               tagged = v;
+            else if (constNode.props.isThis) tagged = thisValue || mkUndefined();
             else tagged = mkUndefined();
             objPtrs.set(ptr, { ptr, obj: getPayload(tagged), value: tagged });
           }

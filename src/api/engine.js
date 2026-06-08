@@ -4,6 +4,7 @@ import { RegisterBytecodeCompiler } from "../bytecode/register/compiler/index.js
 import {
   RegisterInterpreter,
   RegisterFrame,
+  updateCallMode,
 } from "../bytecode/register/interpreter/index.js";
 import { RegisterCompiledFunction } from "../bytecode/register/ops/bytecode.js";
 import { SpeculativeOptimizer } from "../optimizing/optimizer.js";
@@ -204,6 +205,7 @@ export class MiniJIT {
       );
       if (baselineFn) {
         compiledFn.baselineCode = baselineFn;
+        updateCallMode(compiledFn);
       }
     } catch (e) {
       tracer.jitCompile(compiledFn.name, `Baseline failed: ${e.message}`);
@@ -229,6 +231,7 @@ export class MiniJIT {
 
       if (wasmFn) {
         compiledFn.optimizedCode = wasmFn;
+        updateCallMode(compiledFn);
         compiledFn.compileFailureCount = 0;
         compiledFn.lastCompileFailureReason = null;
         compiledFn.optimizationCooldownUntil = 0;
@@ -316,6 +319,7 @@ export class MiniJIT {
           dependencyRegistry.unregister(fn);
           fn.optimizedCode = null;
           fn.disableOptimization = false;
+          updateCallMode(fn);
           flushedCount++;
         }
         if (fn.codeAge >= CODE_AGE_THRESHOLD * 2 && fn.baselineCode) {
@@ -324,6 +328,7 @@ export class MiniJIT {
             `Code aged out (age=${fn.codeAge}) — flushing baseline code`,
           );
           fn.baselineCode = null;
+          updateCallMode(fn);
           flushedCount++;
         }
         if (fn.codeAge >= CODE_AGE_THRESHOLD) {

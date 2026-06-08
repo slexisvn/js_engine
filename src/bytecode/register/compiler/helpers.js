@@ -72,6 +72,16 @@ export class Scope {
     this.upvalueMap = new Map();
   }
 
+  isInScriptScope() {
+    let scope = this;
+    while (scope) {
+      if (scope.isScript) return true;
+      if (scope.isFunctionBoundary) return false;
+      scope = scope.parent;
+    }
+    return false;
+  }
+
   resolve(name) {
     if (this.locals.has(name)) {
       const binding = this.bindings.get(name) || {};

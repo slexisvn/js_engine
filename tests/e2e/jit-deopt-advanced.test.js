@@ -697,4 +697,259 @@ describe("E2E: JIT coercion and edge cases", () => {
     `);
     expect(r.value).toBe(99);
   });
+
+  it("this in method returning computed value after JIT", () => {
+    const r = engine.runValue(`
+      var obj = {val: 5, double: function() { return this.val * 2; }};
+      for (var i = 0; i < 10; i++) obj.double();
+      obj.val = 50;
+      obj.double();
+    `);
+    expect(r.value).toBe(100);
+  });
+
+  it("this in method called on different objects after JIT", () => {
+    const r = engine.runValue(`
+      function getValue() { return this.v; }
+      var a = {v: 1, getValue: getValue};
+      var b = {v: 2, getValue: getValue};
+      for (var i = 0; i < 10; i++) a.getValue();
+      b.getValue();
+    `);
+    expect(r.value).toBe(2);
+  });
+
+  it("this in nested method call chain after JIT", () => {
+    const r = engine.runValue(`
+      var obj = {
+        val: 10,
+        double: function() { return this.val * 2; },
+        triple: function() { return this.val * 3; }
+      };
+      for (var i = 0; i < 10; i++) {
+        obj.double();
+        obj.triple();
+      }
+      obj.val = 7;
+      obj.double() + obj.triple();
+    `);
+    expect(r.value).toBe(35);
+  });
+
+  it("this survives deopt when value changes", () => {
+    const r = engine.runValue(`
+      var obj = {val: 10, get: function() { return this.val; }};
+      for (var i = 0; i < 10; i++) obj.get();
+      obj.val = 999;
+      obj.get();
+    `);
+    expect(r.value).toBe(999);
+  });
+
+  it("this in constructor after JIT warmup", () => {
+    const r = engine.runValue(`
+      function Point(x, y) {
+        this.x = x;
+        this.y = y;
+      }
+      for (var i = 0; i < 10; i++) new Point(i, i);
+      var p = new Point(42, 99);
+      p.x + p.y;
+    `);
+    expect(r.value).toBe(141);
+  });
+
+  it("method on prototype with this under JIT", () => {
+    const r = engine.runValue(`
+      function Box(v) { this.v = v; }
+      Box.prototype.get = function() { return this.v; };
+      for (var i = 0; i < 10; i++) {
+        var b = new Box(i);
+        b.get();
+      }
+      var final = new Box(777);
+      final.get();
+    `);
+    expect(r.value).toBe(777);
+  });
+});
+
+describe("E2E: baseline CALL_METHOD codegen", () => {
+  let engine;
+  beforeEach(() => { engine = jitEngine(); });
+
+  it("array.push via baseline-compiled function", () => {
+    const r = engine.runValue(`
+      function pushItems(arr, n) {
+        for (var i = 0; i < n; i++) arr.push(i);
+        return arr.length;
+      }
+      for (var k = 0; k < 10; k++) pushItems([], 3);
+      pushItems([], 7);
+    `);
+    expect(r.value).toBe(7);
+  });
+
+  it("array.slice via baseline-compiled function", () => {
+    const r = engine.runValue(`
+      function mid(arr) {
+        var h = arr.length / 2;
+        return arr.slice(0, h);
+      }
+      for (var k = 0; k < 10; k++) mid([1,2,3,4]);
+      var res = mid([10,20,30,40,50,60]);
+      res.length;
+    `);
+    expect(r.value).toBe(3);
+  });
+
+  it("array.join via baseline-compiled function", () => {
+    const r = engine.runValue(`
+      function fmt(arr) { return arr.join("-"); }
+      for (var k = 0; k < 10; k++) fmt([1,2]);
+      fmt([1,2,3]);
+    `);
+    expect(r.value).toBe("1-2-3");
+  });
+
+  it("string.charAt via baseline-compiled function", () => {
+    const r = engine.runValue(`
+      function ch(s, i) { return s.charAt(i); }
+      for (var k = 0; k < 10; k++) ch("abcdef", 0);
+      ch("hello", 4);
+    `);
+    expect(r.value).toBe("o");
+  });
+
+  it("string.indexOf via baseline-compiled function", () => {
+    const r = engine.runValue(`
+      function idx(s, c) { return s.indexOf(c); }
+      for (var k = 0; k < 10; k++) idx("abcdef", "c");
+      idx("hello world", "world");
+    `);
+    expect(r.value).toBe(6);
+  });
+
+  it("Math.floor via baseline-compiled function", () => {
+    const r = engine.runValue(`
+      function half(n) { return Math.floor(n / 2); }
+      for (var k = 0; k < 10; k++) half(10);
+      half(15);
+    `);
+    expect(r.value).toBe(7);
+  });
+
+  it("Math.abs via baseline-compiled function", () => {
+    const r = engine.runValue(`
+      function absVal(x) { return Math.abs(x); }
+      for (var k = 0; k < 10; k++) absVal(5);
+      absVal(0 - 42);
+    `);
+    expect(r.value).toBe(42);
+  });
+
+  it("multiple method calls in one baseline function", () => {
+    const r = engine.runValue(`
+      function process(arr) {
+        arr.push(99);
+        var s = arr.slice(0, 2);
+        return s.join("+");
+      }
+      for (var k = 0; k < 10; k++) process([1, 2, 3]);
+      process([10, 20, 30]);
+    `);
+    expect(r.value).toBe("10+20");
+  });
+
+  it("merge sort using method calls through baseline", () => {
+    const r = engine.runValue(`
+      function merge(l, r) {
+        var out = [];
+        var i = 0;
+        var j = 0;
+        while (i < l.length && j < r.length) {
+          if (l[i] <= r[j]) { out.push(l[i]); i++; }
+          else { out.push(r[j]); j++; }
+        }
+        while (i < l.length) { out.push(l[i]); i++; }
+        while (j < r.length) { out.push(r[j]); j++; }
+        return out;
+      }
+      function msort(a) {
+        if (a.length <= 1) return a;
+        var m = Math.floor(a.length / 2);
+        return merge(msort(a.slice(0, m)), msort(a.slice(m)));
+      }
+      msort([5,3,8,1,9,2,7]).join(",");
+    `);
+    expect(r.value).toBe("1,2,3,5,7,8,9");
+  });
+});
+
+describe("E2E: baseline to JIT tier-up", () => {
+  it("function promotes from baseline to optimized", () => {
+    const engine = new MiniJIT({
+      tieringPolicy: { jitThreshold: 5, baselineThreshold: 2 },
+    });
+    engine.run(`
+      function add(a, b) { return a + b; }
+      for (var i = 0; i < 3; i++) add(i, i);
+    `);
+    const fnAfterBaseline = engine.collectFunctions().find(f => f.name === "add");
+    expect(fnAfterBaseline.baselineCode).toBeTruthy();
+
+    engine.run("for (var i = 0; i < 10; i++) add(i, i);");
+    const fnAfterJIT = engine.collectFunctions().find(f => f.name === "add");
+    expect(fnAfterJIT.optimizedCode).toBeTruthy();
+  });
+
+  it("baseline-compiled function produces correct results after JIT promotion", () => {
+    const engine = new MiniJIT({
+      tieringPolicy: { jitThreshold: 5, baselineThreshold: 2 },
+    });
+    const r = engine.runValue(`
+      function mul(a, b) { return a * b; }
+      for (var i = 0; i < 20; i++) mul(i, 2);
+      mul(123, 456);
+    `);
+    expect(r.value).toBe(56088);
+  });
+});
+
+describe("E2E: stale callMode recovery after deopt", () => {
+  it("recursive function recovers after deopt clears optimizedCode", () => {
+    const engine = new MiniJIT({
+      tieringPolicy: { jitThreshold: 5, baselineThreshold: 2 },
+    });
+    const r = engine.runValue(`
+      function fib(n) { if (n <= 1) return n; return fib(n - 1) + fib(n - 2); }
+      for (var i = 0; i < 10; i++) fib(5);
+      fib(10);
+    `);
+    expect(r.value).toBe(55);
+  });
+
+  it("function works correctly after deopt nulls optimizedCode mid-execution", () => {
+    const engine = new MiniJIT({
+      tieringPolicy: { jitThreshold: 5, baselineThreshold: 2 },
+    });
+    const r = engine.runValue(`
+      function compute(x) { return x * x + x; }
+      for (var i = 0; i < 10; i++) compute(i);
+      compute(1.5);
+    `);
+    expect(r.value).toBe(3.75);
+  });
+
+  it("deopt in deep recursion still returns correct result", () => {
+    const engine = new MiniJIT({
+      tieringPolicy: { jitThreshold: 5, baselineThreshold: 2 },
+    });
+    const r = engine.runValue(`
+      function sum(n) { if (n <= 0) return 0; return n + sum(n - 1); }
+      for (var i = 0; i < 10; i++) sum(5);
+      sum(100);
+    `);
+    expect(r.value).toBe(5050);
+  });
 });

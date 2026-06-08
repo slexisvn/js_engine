@@ -230,6 +230,7 @@ export class RegisterCompiledFunction {
     this.lastExecutionTime = 0;
     this.codeAge = 0;
     this._icKeys = null;
+    this.hoistedVarNames = null;
   }
 
   getICKey(funcName, fbSlotIdx) {

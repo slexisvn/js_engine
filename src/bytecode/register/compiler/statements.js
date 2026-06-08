@@ -59,6 +59,16 @@ export const statementMethods = {
   },
 
   compileLetDeclaration(node) {
+    const isScriptVar = this.scope.isInScriptScope() && node.type === NodeType.VarDeclaration;
+
+    if (isScriptVar) {
+      if (node.init === null) return;
+      this.compileExpression(node.init);
+      const nameIdx = this.func.addConstant(node.name);
+      this.func.emit(bytecode.ROP_STA_GLOBAL, nameIdx);
+      return;
+    }
+
     const resolved = this.scope.resolve(node.name);
     const kind =
       node.type === NodeType.ConstDeclaration

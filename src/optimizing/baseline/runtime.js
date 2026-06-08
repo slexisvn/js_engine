@@ -196,8 +196,47 @@ export class BaselineRuntime {
       }
       return val !== undefined ? val : this.u;
     }
-    if (isArray(obj)) return runtimeGetProperty(obj, propName, this.interp);
-    if (isString(obj)) return runtimeGetProperty(obj, propName, this.interp);
+    if (isArray(obj)) {
+      const arr = getPayload(obj);
+      if (propName === "length") return mkSmi(arr.getLength());
+      const idx = Number(propName);
+      if (Number.isInteger(idx)) {
+        const val = arr.getIndex(idx);
+        return val !== undefined ? val : this.u;
+      }
+      const ownVal = arr.getProperty(propName);
+      if (ownVal !== undefined) return ownVal;
+      return this.interp._lookupBuiltinPrototype(
+        this.interp.builtinPrototypes.arrayPrototype,
+        propName,
+      );
+    }
+    if (isString(obj)) {
+      if (propName === "length") return mkSmi(getPayload(obj).length);
+      const idx = Number(propName);
+      if (Number.isInteger(idx)) {
+        const ch = getPayload(obj)[idx];
+        return ch !== undefined ? mkString(ch) : this.u;
+      }
+      return this.interp._lookupBuiltinPrototype(
+        this.interp.builtinPrototypes.stringPrototype,
+        propName,
+      );
+    }
+    if (isFunction(obj)) {
+      const fn = getPayload(obj);
+      if (fn.properties && fn.properties[propName] !== undefined) {
+        return fn.properties[propName];
+      }
+      if (propName === "prototype") {
+        if (!fn.prototypeObj) {
+          fn.prototypeObj = createJSObject();
+          fn.prototypeObj.constructorRef = fn;
+        }
+        return mkObject(fn.prototypeObj);
+      }
+      return this.u;
+    }
     return this.u;
   }
 

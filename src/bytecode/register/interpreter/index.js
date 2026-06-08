@@ -37,6 +37,11 @@ import {
   isPrimitive,
   initWellKnownSymbols,
   wellKnownSymbols,
+  areBothSmi,
+  areBothNumber,
+  smiPayload,
+  SMI_MIN,
+  SMI_MAX,
 } from "../../../core/value/index.js";
 
 import {
@@ -123,6 +128,21 @@ import {
 export { MAX_DEOPT_COUNT } from "./helpers.js";
 export { RegisterFrame } from "./frame.js";
 
+export const CALL_INTERPRETED = 0;
+export const CALL_BASELINE = 1;
+export const CALL_OPTIMIZED = 2;
+export const CALL_NATIVE = 3;
+export const CALL_GENERATOR = 4;
+export const CALL_ASYNC = 5;
+
+export function updateCallMode(compiled) {
+  if (compiled.isGenerator) compiled.callMode = CALL_GENERATOR;
+  else if (compiled.isAsync) compiled.callMode = CALL_ASYNC;
+  else if (compiled.optimizedCode) compiled.callMode = CALL_OPTIMIZED;
+  else if (compiled.baselineCode) compiled.callMode = CALL_BASELINE;
+  else compiled.callMode = CALL_INTERPRETED;
+}
+
 function boxPrimitive(value, interpreter) {
   if (isString(value)) {
     const wrapper = createJSPrimitiveWrapper(INSTANCE_TYPE_STRING_WRAPPER, value);
@@ -145,6 +165,82 @@ function boxPrimitive(value, interpreter) {
   return value;
 }
 
+function recordCallFeedback(slot, fn, args, thisValue) {
+  if (!slot || slot.isStable) return;
+  const receiverMapId =
+    thisValue && isObject(thisValue)
+      ? getPayload(thisValue).hiddenClass.id
+      : null;
+  const receiverMapVersion =
+    thisValue && isObject(thisValue)
+      ? getPayload(thisValue).hiddenClass.version
+      : null;
+  slot.recordCallTarget(
+    fn.name || "<anonymous>",
+    fn.compiled || null,
+    args.length,
+    receiverMapId,
+    receiverMapVersion,
+  );
+}
+
+function recordReturnFeedback(slot, result) {
+  if (slot && !slot.isStable && result) slot.recordReturnType(getTag(result));
+}
+
+function interpretCall(compiled, fn, callee, args, thisValue, interpreter) {
+  const closureEnv = fn.closure || null;
+  const callFrame = new RegisterFrame(compiled, args, thisValue, closureEnv);
+  if (compiled.selfBindingSlot !== undefined) {
+    callFrame.setReg(compiled.selfBindingSlot, callee);
+  }
+  if (!compiled.feedbackVector) interpreter.initFeedbackVector(compiled);
+  return interpreter.runFrame(callFrame);
+}
+
+function tryTierUp(compiled, fn, callee, args, thisValue, interpreter) {
+  const policy = interpreter.tieringPolicy;
+  const engine = interpreter.jitEngine;
+  if (!engine || !policy || fn.closure) return null;
+
+  if (typeof policy.recordExecution === "function") {
+    policy.recordExecution(compiled, 0);
+  }
+
+  const adaptivePolicy = typeof policy.shouldOptimize === "function";
+  const shouldJIT = adaptivePolicy
+    ? policy.shouldOptimize(compiled)
+    : compiled.invocationCount >= policy.jitThreshold &&
+      !compiled.optimizedCode &&
+      !compiled.disableOptimization;
+
+  if (shouldJIT && !requiresInterpreterOnly(compiled) && typeof engine.optimizeFunction === "function") {
+    if (adaptivePolicy) policy.notifyCompilationStart();
+    engine.optimizeFunction(compiled);
+    if (adaptivePolicy) policy.notifyCompilationEnd();
+    if (compiled.optimizedCode) {
+      updateCallMode(compiled);
+      return compiled.optimizedCode(args, thisValue, interpreter);
+    }
+  }
+
+  if (
+    compiled.invocationCount >= policy.baselineThreshold &&
+    !compiled.baselineCode &&
+    !compiled.optimizedCode &&
+    !requiresInterpreterOnly(compiled) &&
+    typeof engine.baselineCompile === "function"
+  ) {
+    engine.baselineCompile(compiled);
+    if (compiled.baselineCode) {
+      updateCallMode(compiled);
+      return compiled.baselineCode(args, thisValue, interpreter);
+    }
+  }
+
+  return null;
+}
+
 function callFunction(callee, args, thisValue, slot, interpreter, frame) {
   if (!isFunction(callee)) {
     throw new VMTypeError(`${toDisplayString(callee)} is not a function`);
@@ -153,143 +249,70 @@ function callFunction(callee, args, thisValue, slot, interpreter, frame) {
   if (fn.compiled && !fn.compiled.isStrict && isPrimitive(thisValue) && !isNull(thisValue) && !isUndefined(thisValue)) {
     thisValue = boxPrimitive(thisValue, interpreter);
   }
-  if (slot) {
-    const receiverMapId =
-      thisValue && isObject(thisValue)
-        ? getPayload(thisValue).hiddenClass.id
-        : null;
-    const receiverMapVersion =
-      thisValue && isObject(thisValue)
-        ? getPayload(thisValue).hiddenClass.version
-        : null;
-    slot.recordCallTarget(
-      fn.name || "<anonymous>",
-      fn.compiled || null,
-      args.length,
-      receiverMapId,
-      receiverMapVersion,
-    );
-  }
-  if (fn.compiled && fn.compiled.isGenerator) {
-    const genFrame = new RegisterFrame(
-      fn.compiled,
-      args,
-      thisValue,
-      fn.closure,
-    );
-    interpreter.initFeedbackVector(fn.compiled);
-    const gen = new GeneratorObject(genFrame);
-    const result = mkGenerator(gen);
-    if (slot && result) slot.recordReturnType(getTag(result));
+
+  recordCallFeedback(slot, fn, args, thisValue);
+
+  if (fn.call) {
+    const result = fn.call(args, thisValue, interpreter);
+    recordReturnFeedback(slot, result);
     return result;
   }
-  if (fn.compiled && fn.compiled.isAsync) {
-    const { capability, value } = mkPromiseCapability(
-      interpreter.microtaskQueue,
-    );
-    const asyncFrame = new RegisterFrame(
-      fn.compiled,
-      args,
-      thisValue,
-      fn.closure,
-    );
-    interpreter.initFeedbackVector(fn.compiled);
+
+  if (!fn.compiled) {
+    throw new Error(`Cannot call function: ${fn.name || "unknown"}`);
+  }
+
+  const compiled = fn.compiled;
+  compiled.invocationCount = (compiled.invocationCount || 0) + 1;
+
+  if (compiled.isLazy && interpreter.jitEngine && typeof interpreter.jitEngine.compileLazy === "function") {
+    interpreter.jitEngine.compileLazy(compiled);
+  }
+
+  if (compiled.callMode === undefined) updateCallMode(compiled);
+
+  if (compiled.callMode === CALL_OPTIMIZED) {
+    if (compiled.optimizedCode) {
+      const result = compiled.optimizedCode(args, thisValue, interpreter);
+      recordReturnFeedback(slot, result);
+      return result;
+    }
+    updateCallMode(compiled);
+  }
+
+  if (compiled.callMode === CALL_GENERATOR) {
+    const genFrame = new RegisterFrame(compiled, args, thisValue, fn.closure);
+    if (!compiled.feedbackVector) interpreter.initFeedbackVector(compiled);
+    const gen = new GeneratorObject(genFrame);
+    const result = mkGenerator(gen);
+    recordReturnFeedback(slot, result);
+    return result;
+  }
+
+  if (compiled.callMode === CALL_ASYNC) {
+    const { capability, value } = mkPromiseCapability(interpreter.microtaskQueue);
+    const asyncFrame = new RegisterFrame(compiled, args, thisValue, fn.closure);
+    if (!compiled.feedbackVector) interpreter.initFeedbackVector(compiled);
     runAsyncWithSuspension(interpreter, asyncFrame, capability);
-    if (slot && value) slot.recordReturnType(getTag(value));
+    recordReturnFeedback(slot, value);
     return value;
   }
 
-  let callResult;
-  if (fn.call) {
-    callResult = fn.call(args, thisValue, interpreter);
-  } else if (fn.compiled) {
-    const compiled = fn.compiled;
-    compiled.invocationCount = (compiled.invocationCount || 0) + 1;
-
-    if (
-      compiled.isLazy &&
-      interpreter.jitEngine &&
-      typeof interpreter.jitEngine.compileLazy === "function"
-    ) {
-      interpreter.jitEngine.compileLazy(compiled);
+  {
+    const tierResult = tryTierUp(compiled, fn, callee, args, thisValue, interpreter);
+    if (tierResult !== null) {
+      recordReturnFeedback(slot, tierResult);
+      return tierResult;
     }
-
-    if (interpreter.jitEngine && interpreter.tieringPolicy && !fn.closure) {
-      if (compiled.optimizedCode) {
-        callResult = compiled.optimizedCode(args, thisValue, interpreter);
-        if (slot && callResult) slot.recordReturnType(getTag(callResult));
-        return callResult;
-      }
-
-      if (typeof interpreter.tieringPolicy.recordExecution === "function") {
-        interpreter.tieringPolicy.recordExecution(compiled, 0);
-      }
-
-      const adaptivePolicy = typeof interpreter.tieringPolicy.shouldOptimize === "function";
-      const shouldJIT = adaptivePolicy
-        ? interpreter.tieringPolicy.shouldOptimize(compiled)
-        : compiled.invocationCount >= interpreter.tieringPolicy.jitThreshold &&
-          !compiled.optimizedCode &&
-          !compiled.disableOptimization;
-
-      if (shouldJIT && !requiresInterpreterOnly(compiled) && typeof interpreter.jitEngine.optimizeFunction === "function") {
-        if (adaptivePolicy) interpreter.tieringPolicy.notifyCompilationStart();
-        interpreter.jitEngine.optimizeFunction(compiled);
-        if (adaptivePolicy) interpreter.tieringPolicy.notifyCompilationEnd();
-        if (compiled.optimizedCode) {
-          callResult = compiled.optimizedCode(args, thisValue, interpreter);
-          if (slot && callResult) slot.recordReturnType(getTag(callResult));
-          return callResult;
-        }
-      }
-
-      if (compiled.baselineCode) {
-        callResult = compiled.baselineCode(args, thisValue, interpreter);
-        if (slot && callResult) slot.recordReturnType(getTag(callResult));
-        return callResult;
-      }
-      if (
-        compiled.invocationCount >=
-          interpreter.tieringPolicy.baselineThreshold &&
-        !compiled.baselineCode &&
-        !compiled.optimizedCode &&
-        !requiresInterpreterOnly(compiled) &&
-        typeof interpreter.jitEngine.baselineCompile === "function"
-      ) {
-        interpreter.jitEngine.baselineCompile(compiled);
-        if (compiled.baselineCode) {
-          callResult = compiled.baselineCode(args, thisValue, interpreter);
-          if (slot && callResult) slot.recordReturnType(getTag(callResult));
-          return callResult;
-        }
-      }
+    if (compiled.baselineCode) {
+      const result = compiled.baselineCode(args, thisValue, interpreter);
+      recordReturnFeedback(slot, result);
+      return result;
     }
-
-    if (fn.closure) {
-      const closureFrame = new RegisterFrame(
-        compiled,
-        args,
-        thisValue,
-        fn.closure,
-      );
-      if (compiled.selfBindingSlot !== undefined) {
-        closureFrame.setReg(compiled.selfBindingSlot, callee);
-      }
-      interpreter.initFeedbackVector(compiled);
-      callResult = interpreter.runFrame(closureFrame);
-    } else {
-      const frame = new RegisterFrame(compiled, args, thisValue, null);
-      if (compiled.selfBindingSlot !== undefined) {
-        frame.setReg(compiled.selfBindingSlot, callee);
-      }
-      interpreter.initFeedbackVector(compiled);
-      callResult = interpreter.runFrame(frame);
-    }
-  } else {
-    throw new Error(`Cannot call function: ${fn.name || "unknown"}`);
+    const result = interpretCall(compiled, fn, callee, args, thisValue, interpreter);
+    recordReturnFeedback(slot, result);
+    return result;
   }
-  if (slot && callResult) slot.recordReturnType(getTag(callResult));
-  return callResult;
 }
 
 export class RegisterInterpreter {
@@ -493,6 +516,14 @@ export class RegisterInterpreter {
     };
     compiledFn.lastExecutionTime = Date.now();
     compiledFn.codeAge = 0;
+
+    if (compiledFn.hoistedVarNames) {
+      for (const name of compiledFn.hoistedVarNames) {
+        if (!this.globalCells.has(name)) {
+          this.globalCells.write(name, mkUndefined());
+        }
+      }
+    }
 
     if (
       compiledFn.isLazy &&
@@ -785,11 +816,13 @@ export class RegisterInterpreter {
           const op = instr.opcode;
           const operands = instr.operands;
 
-          tracer.interpret(
-            funcName,
-            bytecode.rOpcodeName(op),
-            operands.length > 0 ? `[${operands.join(", ")}]` : "",
-          );
+          if (tracer.enabled) {
+            tracer.interpret(
+              funcName,
+              bytecode.rOpcodeName(op),
+              operands.length > 0 ? `[${operands.join(", ")}]` : "",
+            );
+          }
 
           frame.pc++;
 
@@ -869,11 +902,13 @@ export class RegisterInterpreter {
                 operands,
                 compiledFn,
               );
-              if (isSmi(left) && isSmi(right)) {
-                const result = getPayload(left) + getPayload(right);
+              if (areBothSmi(left, right)) {
+                const result = smiPayload(left) + smiPayload(right);
                 frame.acc =
-                  result === (result | 0) ? mkSmi(result) : mkDouble(result);
-              } else if (isNumber(left) && isNumber(right)) {
+                  result >= SMI_MIN && result <= SMI_MAX
+                    ? mkSmi(result)
+                    : mkDouble(result);
+              } else if (areBothNumber(left, right)) {
                 frame.acc = mkDouble(toNumber(left) + toNumber(right));
               } else if (isString(left) || isString(right)) {
                 frame.acc = mkString(
@@ -891,10 +926,12 @@ export class RegisterInterpreter {
                 operands,
                 compiledFn,
               );
-              if (isSmi(left) && isSmi(right)) {
-                const result = getPayload(left) - getPayload(right);
+              if (areBothSmi(left, right)) {
+                const result = smiPayload(left) - smiPayload(right);
                 frame.acc =
-                  result === (result | 0) ? mkSmi(result) : mkDouble(result);
+                  result >= SMI_MIN && result <= SMI_MAX
+                    ? mkSmi(result)
+                    : mkDouble(result);
               } else {
                 frame.acc = mkDouble(toNumber(left) - toNumber(right));
               }
@@ -907,10 +944,12 @@ export class RegisterInterpreter {
                 operands,
                 compiledFn,
               );
-              if (isSmi(left) && isSmi(right)) {
-                const result = getPayload(left) * getPayload(right);
+              if (areBothSmi(left, right)) {
+                const result = smiPayload(left) * smiPayload(right);
                 frame.acc =
-                  result === (result | 0) ? mkSmi(result) : mkDouble(result);
+                  result >= SMI_MIN && result <= SMI_MAX
+                    ? mkSmi(result)
+                    : mkDouble(result);
               } else {
                 frame.acc = mkDouble(toNumber(left) * toNumber(right));
               }
@@ -925,7 +964,9 @@ export class RegisterInterpreter {
               );
               const result = toNumber(left) / toNumber(right);
               frame.acc =
-                Number.isInteger(result) && result === (result | 0)
+                Number.isInteger(result) &&
+                result >= SMI_MIN &&
+                result <= SMI_MAX
                   ? mkSmi(result)
                   : mkDouble(result);
               break;
@@ -937,8 +978,8 @@ export class RegisterInterpreter {
                 operands,
                 compiledFn,
               );
-              if (isSmi(left) && isSmi(right) && getPayload(right) !== 0) {
-                frame.acc = mkSmi(getPayload(left) % getPayload(right));
+              if (areBothSmi(left, right) && smiPayload(right) !== 0) {
+                frame.acc = mkSmi(smiPayload(left) % smiPayload(right));
               } else {
                 frame.acc = mkDouble(toNumber(left) % toNumber(right));
               }
@@ -951,14 +992,14 @@ export class RegisterInterpreter {
                 operands,
                 compiledFn,
               );
-              if (isSmi(left) && isSmi(right))
-                frame.acc = mkBool(getPayload(left) === getPayload(right));
-              else if (isNumber(left) && isNumber(right))
+              if (areBothSmi(left, right))
+                frame.acc = mkBool(left === right);
+              else if (areBothNumber(left, right))
                 frame.acc = mkBool(toNumber(left) === toNumber(right));
               else if (isString(left) && isString(right))
                 frame.acc = mkBool(getPayload(left) === getPayload(right));
               else if (isBool(left) && isBool(right))
-                frame.acc = mkBool(getPayload(left) === getPayload(right));
+                frame.acc = mkBool(left === right);
               else if (isNull(left) && isNull(right)) frame.acc = mkBool(true);
               else if (isUndefined(left) && isUndefined(right))
                 frame.acc = mkBool(true);
@@ -979,14 +1020,14 @@ export class RegisterInterpreter {
                 operands,
                 compiledFn,
               );
-              if (isSmi(left) && isSmi(right))
-                frame.acc = mkBool(getPayload(left) !== getPayload(right));
-              else if (isNumber(left) && isNumber(right))
+              if (areBothSmi(left, right))
+                frame.acc = mkBool(left !== right);
+              else if (areBothNumber(left, right))
                 frame.acc = mkBool(toNumber(left) !== toNumber(right));
               else if (isString(left) && isString(right))
                 frame.acc = mkBool(getPayload(left) !== getPayload(right));
               else if (isBool(left) && isBool(right))
-                frame.acc = mkBool(getPayload(left) !== getPayload(right));
+                frame.acc = mkBool(left !== right);
               else if (isNull(left) && isNull(right)) frame.acc = mkBool(false);
               else if (isUndefined(left) && isUndefined(right))
                 frame.acc = mkBool(false);
@@ -1027,7 +1068,9 @@ export class RegisterInterpreter {
                 operands,
                 compiledFn,
               );
-              if (isNumber(left) && isNumber(right))
+              if (areBothSmi(left, right))
+                frame.acc = mkBool(left < right);
+              else if (areBothNumber(left, right))
                 frame.acc = mkBool(toNumber(left) < toNumber(right));
               else if (isString(left) && isString(right))
                 frame.acc = mkBool(getPayload(left) < getPayload(right));
@@ -1041,7 +1084,9 @@ export class RegisterInterpreter {
                 operands,
                 compiledFn,
               );
-              if (isNumber(left) && isNumber(right))
+              if (areBothSmi(left, right))
+                frame.acc = mkBool(left > right);
+              else if (areBothNumber(left, right))
                 frame.acc = mkBool(toNumber(left) > toNumber(right));
               else if (isString(left) && isString(right))
                 frame.acc = mkBool(getPayload(left) > getPayload(right));
@@ -1055,7 +1100,9 @@ export class RegisterInterpreter {
                 operands,
                 compiledFn,
               );
-              if (isNumber(left) && isNumber(right))
+              if (areBothSmi(left, right))
+                frame.acc = mkBool(left <= right);
+              else if (areBothNumber(left, right))
                 frame.acc = mkBool(toNumber(left) <= toNumber(right));
               else if (isString(left) && isString(right))
                 frame.acc = mkBool(getPayload(left) <= getPayload(right));
@@ -1069,7 +1116,9 @@ export class RegisterInterpreter {
                 operands,
                 compiledFn,
               );
-              if (isNumber(left) && isNumber(right))
+              if (areBothSmi(left, right))
+                frame.acc = mkBool(left >= right);
+              else if (areBothNumber(left, right))
                 frame.acc = mkBool(toNumber(left) >= toNumber(right));
               else if (isString(left) && isString(right))
                 frame.acc = mkBool(getPayload(left) >= getPayload(right));

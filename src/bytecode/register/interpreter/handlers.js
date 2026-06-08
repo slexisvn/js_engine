@@ -64,6 +64,16 @@ import {
 } from "../../../objects/exotic/proxy-ops.js";
 import { RegisterMiniJITException } from "./helpers.js";
 import { RegisterFrame } from "./frame.js";
+import { isNull, isUndefined as isUndefinedVal, typeOf } from "../../../core/value/index.js";
+
+function throwIfNullish(obj, propName, write) {
+  if (isNull(obj) || isUndefinedVal(obj)) {
+    const typeName = isNull(obj) ? "null" : "undefined";
+    const verb = write ? "set" : "read";
+    const gerund = write ? "setting" : "reading";
+    throw new VMTypeError(`Cannot ${verb} properties of ${typeName} (${gerund} '${propName}')`);
+  }
+}
 
 export function handleLdaProp(interp, frame, operands, compiledFn, funcName) {
   const objReg = operands[0];
@@ -71,6 +81,8 @@ export function handleLdaProp(interp, frame, operands, compiledFn, funcName) {
   const fbSlotIdx = operands[2];
   const obj = frame.getReg(objReg);
   const propName = compiledFn.constants[propNameIdx];
+
+  throwIfNullish(obj, propName);
 
   if (isJSProxyValue(obj)) {
     return runtimeGetProperty(obj, propName, interp);
@@ -393,6 +405,8 @@ export function handleStaProp(interp, frame, operands, compiledFn, funcName) {
   const propName = compiledFn.constants[propNameIdx];
   const value = frame.acc;
 
+  throwIfNullish(obj, propName, true);
+
   if (isJSProxyValue(obj)) {
     runtimeSetProperty(obj, propName, value, interp);
     return;
@@ -480,6 +494,12 @@ export function handleLdaIndex(interp, frame, operands, compiledFn, funcName) {
   const obj = frame.getReg(objReg);
   const index = frame.getReg(idxReg);
 
+  if (isNull(obj) || isUndefinedVal(obj)) {
+    const typeName = isNull(obj) ? "null" : "undefined";
+    const key = isString(index) ? getPayload(index) : toDisplayString(index);
+    throw new VMTypeError(`Cannot read properties of ${typeName} (reading '${key}')`);
+  }
+
   if (isSymbol(index)) {
     return runtimeGetProperty(obj, index, interp);
   }
@@ -530,6 +550,12 @@ export function handleStaIndex(interp, frame, operands, compiledFn, funcName) {
   const obj = frame.getReg(objReg);
   const index = frame.getReg(idxReg);
   const value = frame.acc;
+
+  if (isNull(obj) || isUndefinedVal(obj)) {
+    const typeName = isNull(obj) ? "null" : "undefined";
+    const key = isString(index) ? getPayload(index) : toDisplayString(index);
+    throw new VMTypeError(`Cannot set properties of ${typeName} (setting '${key}')`);
+  }
 
   if (isSymbol(index)) {
     runtimeSetProperty(obj, index, value, interp);

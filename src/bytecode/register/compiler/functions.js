@@ -439,18 +439,25 @@ export const functionMethods = {
     const lenSlot = lenResolved
       ? lenResolved.slot
       : this._declareLocal("_len$", "var");
-    const varResolved = this.scope.resolve(node.variable);
-    const varSlot = varResolved
-      ? varResolved.slot
-      : this._declareLocal(
-          node.variable,
+    const isScriptVar = this.scope.isInScriptScope() && node.kind === "var";
+    let varSlot = null;
+    let varGlobalNameIdx = null;
+    if (isScriptVar) {
+      varGlobalNameIdx = this.func.addConstant(node.variable);
+    } else {
+      const varResolved = this.scope.resolve(node.variable);
+      varSlot = varResolved
+        ? varResolved.slot
+        : this._declareLocal(
+            node.variable,
+            node.kind === "const" ? "const" : node.kind === "var" ? "var" : "let",
+          );
+      if (!varResolved) {
+        this.func.setLocalBindingKind(
+          varSlot,
           node.kind === "const" ? "const" : node.kind === "var" ? "var" : "let",
         );
-    if (!varResolved) {
-      this.func.setLocalBindingKind(
-        varSlot,
-        node.kind === "const" ? "const" : node.kind === "var" ? "var" : "let",
-      );
+      }
     }
 
     const objReg = this.temps.alloc();
@@ -482,7 +489,11 @@ export const functionMethods = {
     const exitJump = this.func.emit(bytecode.ROP_JUMP_IF_FALSE, 0);
 
     this.func.emit(bytecode.ROP_LDA_INDEX, keysSlot, iSlot);
-    this.func.emit(bytecode.ROP_STAR, varSlot);
+    if (isScriptVar) {
+      this.func.emit(bytecode.ROP_STA_GLOBAL, varGlobalNameIdx);
+    } else {
+      this.func.emit(bytecode.ROP_STAR, varSlot);
+    }
 
     if (node.body.type === "BlockStatement") {
       this.compileStatements(node.body.body);
@@ -521,18 +532,25 @@ export const functionMethods = {
     const iterResultSlot = iterResultResolved
       ? iterResultResolved.slot
       : this._declareLocal("_iterResult$", "var");
-    const varResolved = this.scope.resolve(node.variable);
-    const varSlot = varResolved
-      ? varResolved.slot
-      : this._declareLocal(
-          node.variable,
+    const isScriptVar = this.scope.isInScriptScope() && node.kind === "var";
+    let varSlot = null;
+    let varGlobalNameIdx = null;
+    if (isScriptVar) {
+      varGlobalNameIdx = this.func.addConstant(node.variable);
+    } else {
+      const varResolved = this.scope.resolve(node.variable);
+      varSlot = varResolved
+        ? varResolved.slot
+        : this._declareLocal(
+            node.variable,
+            node.kind === "const" ? "const" : node.kind === "var" ? "var" : "let",
+          );
+      if (!varResolved) {
+        this.func.setLocalBindingKind(
+          varSlot,
           node.kind === "const" ? "const" : node.kind === "var" ? "var" : "let",
         );
-    if (!varResolved) {
-      this.func.setLocalBindingKind(
-        varSlot,
-        node.kind === "const" ? "const" : node.kind === "var" ? "var" : "let",
-      );
+      }
     }
 
     this.compileExpression(node.iterable);
@@ -558,7 +576,11 @@ export const functionMethods = {
 
     this.func.emit(bytecode.ROP_LDA_REG, iterResultSlot);
     this.func.emit(bytecode.ROP_ITER_VALUE);
-    this.func.emit(bytecode.ROP_STAR, varSlot);
+    if (isScriptVar) {
+      this.func.emit(bytecode.ROP_STA_GLOBAL, varGlobalNameIdx);
+    } else {
+      this.func.emit(bytecode.ROP_STAR, varSlot);
+    }
 
     if (node.body.type === "BlockStatement") {
       this.compileStatements(node.body.body);

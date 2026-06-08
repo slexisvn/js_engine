@@ -71,7 +71,7 @@ export function deoptReasonForNode(node) {
   return DEOPT_GUARD_FAILURE;
 }
 
-export function materializeFrameValue(value, runtimeValues, args, interpreter) {
+export function materializeFrameValue(value, runtimeValues, args, interpreter, thisValue) {
   if (value === null || value === undefined) return mkUndefined();
   if (
     typeof value === "object" &&
@@ -84,6 +84,7 @@ export function materializeFrameValue(value, runtimeValues, args, interpreter) {
         runtimeValues,
         args,
         interpreter,
+        thisValue,
       );
       if (isObject(obj)) {
         const fieldValue = getPayload(obj).getPropertyByOffset(
@@ -99,6 +100,7 @@ export function materializeFrameValue(value, runtimeValues, args, interpreter) {
         runtimeValues,
         args,
         interpreter,
+        thisValue,
       );
       if (isObject(obj)) {
         const payload = getPayload(obj);
@@ -118,6 +120,7 @@ export function materializeFrameValue(value, runtimeValues, args, interpreter) {
         runtimeValues,
         args,
         interpreter,
+        thisValue,
       );
       if (isObject(obj)) {
         const propValue = getPayload(obj).getProperty(value.props.propName);
@@ -140,6 +143,7 @@ export function materializeFrameValue(value, runtimeValues, args, interpreter) {
           runtimeValues,
           args,
           interpreter,
+          thisValue,
         );
     }
     if (value.type === ir.IR_PARAMETER) {
@@ -151,6 +155,7 @@ export function materializeFrameValue(value, runtimeValues, args, interpreter) {
       return globalValue !== undefined ? globalValue : mkUndefined();
     }
     if (value.type === ir.IR_CONSTANT && value.props) {
+      if (value.props.isThis) return thisValue || mkUndefined();
       const constant = value.props.value;
       if (typeof constant === "number") return mkNumber(constant);
       if (typeof constant === "string") return mkString(constant);
@@ -171,12 +176,14 @@ export function materializeFrameValue(value, runtimeValues, args, interpreter) {
           runtimeValues,
           args,
           interpreter,
+          thisValue,
         );
         const right = materializeFrameValue(
           value.inputs[1],
           runtimeValues,
           args,
           interpreter,
+          thisValue,
         );
         if (isString(left) || isString(right)) {
           return mkString(toDisplayString(left) + toDisplayString(right));
@@ -191,12 +198,14 @@ export function materializeFrameValue(value, runtimeValues, args, interpreter) {
           runtimeValues,
           args,
           interpreter,
+          thisValue,
         );
         const right = materializeFrameValue(
           value.inputs[1],
           runtimeValues,
           args,
           interpreter,
+          thisValue,
         );
         return mkNumber(toNumber(left) - toNumber(right));
       }
@@ -208,12 +217,14 @@ export function materializeFrameValue(value, runtimeValues, args, interpreter) {
           runtimeValues,
           args,
           interpreter,
+          thisValue,
         );
         const right = materializeFrameValue(
           value.inputs[1],
           runtimeValues,
           args,
           interpreter,
+          thisValue,
         );
         return mkNumber(toNumber(left) * toNumber(right));
       }
@@ -225,12 +236,14 @@ export function materializeFrameValue(value, runtimeValues, args, interpreter) {
           runtimeValues,
           args,
           interpreter,
+          thisValue,
         );
         const right = materializeFrameValue(
           value.inputs[1],
           runtimeValues,
           args,
           interpreter,
+          thisValue,
         );
         return mkNumber(toNumber(left) / toNumber(right));
       }
@@ -241,12 +254,14 @@ export function materializeFrameValue(value, runtimeValues, args, interpreter) {
           runtimeValues,
           args,
           interpreter,
+          thisValue,
         );
         const right = materializeFrameValue(
           value.inputs[1],
           runtimeValues,
           args,
           interpreter,
+          thisValue,
         );
         return mkNumber(toNumber(left) % toNumber(right));
       }
@@ -258,12 +273,14 @@ export function materializeFrameValue(value, runtimeValues, args, interpreter) {
           runtimeValues,
           args,
           interpreter,
+          thisValue,
         );
         const right = materializeFrameValue(
           value.inputs[1],
           runtimeValues,
           args,
           interpreter,
+          thisValue,
         );
         return mkBool(compareValues(value.props.op, left, right));
       }
@@ -273,6 +290,7 @@ export function materializeFrameValue(value, runtimeValues, args, interpreter) {
           runtimeValues,
           args,
           interpreter,
+          thisValue,
         );
         return mkNumber(-toNumber(input));
       }
@@ -282,6 +300,7 @@ export function materializeFrameValue(value, runtimeValues, args, interpreter) {
           runtimeValues,
           args,
           interpreter,
+          thisValue,
         );
         return mkBool(!toBool(input));
       }
@@ -309,6 +328,7 @@ export function materializeFrameFromState(
         runtimeValues,
         args,
         interpreter,
+        thisValue,
       );
     }
   }
@@ -318,6 +338,7 @@ export function materializeFrameFromState(
       runtimeValues,
       args,
       interpreter,
+      thisValue,
     );
   }
   if (frameState.thisValue !== null) {
@@ -326,6 +347,7 @@ export function materializeFrameFromState(
       runtimeValues,
       args,
       interpreter,
+      thisValue,
     );
   }
   frame.pc = frameState.bytecodeOffset;

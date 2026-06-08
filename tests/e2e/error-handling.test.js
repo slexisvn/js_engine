@@ -128,4 +128,125 @@ describe("E2E: error handling", () => {
     `);
     expect(r.value).toBe(101);
   });
+
+  describe("TypeError on null/undefined property access", () => {
+    describe("null property read", () => {
+      it("null.foo throws TypeError", () => {
+        expect(() => engine.run("null.foo")).toThrow("Cannot read properties of null");
+      });
+
+      it("null.foo includes property name in message", () => {
+        expect(() => engine.run("null.foo")).toThrow("reading 'foo'");
+      });
+
+      it("null[0] throws TypeError", () => {
+        expect(() => engine.run("null[0]")).toThrow("Cannot read properties of null");
+      });
+
+      it("null['bar'] throws TypeError", () => {
+        expect(() => engine.run("null['bar']")).toThrow("Cannot read properties of null");
+      });
+
+      it("variable holding null throws on property access", () => {
+        expect(() => engine.run("var x = null; x.prop;")).toThrow("Cannot read properties of null");
+      });
+
+      it("nested null access throws", () => {
+        expect(() => engine.run("var o = {a: null}; o.a.b;")).toThrow("Cannot read properties of null");
+      });
+    });
+
+    describe("undefined property read", () => {
+      it("undefined.foo throws TypeError", () => {
+        expect(() => engine.run("undefined.foo")).toThrow("Cannot read properties of undefined");
+      });
+
+      it("undefined[0] throws TypeError", () => {
+        expect(() => engine.run("undefined[0]")).toThrow("Cannot read properties of undefined");
+      });
+
+      it("missing property chain throws", () => {
+        expect(() => engine.run("var o = {}; o.a.b;")).toThrow("Cannot read properties of undefined");
+      });
+
+      it("function returning undefined then accessing property throws", () => {
+        expect(() => engine.run(`
+          function f() {}
+          f().x;
+        `)).toThrow("Cannot read properties of undefined");
+      });
+    });
+
+    describe("null/undefined property write", () => {
+      it("null.foo = 1 throws TypeError", () => {
+        expect(() => engine.run("null.foo = 1;")).toThrow("Cannot set properties of null");
+      });
+
+      it("undefined.foo = 1 throws TypeError", () => {
+        expect(() => engine.run("undefined.foo = 1;")).toThrow("Cannot set properties of undefined");
+      });
+
+      it("null[0] = 1 throws TypeError", () => {
+        expect(() => engine.run("null[0] = 1;")).toThrow("Cannot set properties of null");
+      });
+
+      it("undefined[0] = 1 throws TypeError", () => {
+        expect(() => engine.run("undefined[0] = 1;")).toThrow("Cannot set properties of undefined");
+      });
+    });
+
+    describe("catchable TypeError", () => {
+      it("try-catch catches null property access TypeError", () => {
+        const r = engine.runValue(`
+          var caught = false;
+          try { null.foo; }
+          catch (e) { caught = true; }
+          caught;
+        `);
+        expect(r.value).toBe(true);
+      });
+
+      it("try-catch catches undefined property access TypeError", () => {
+        const r = engine.runValue(`
+          var caught = false;
+          try { undefined.foo; }
+          catch (e) { caught = true; }
+          caught;
+        `);
+        expect(r.value).toBe(true);
+      });
+
+      it("execution continues after caught TypeError", () => {
+        const r = engine.runValue(`
+          var result = 0;
+          try { null.x; } catch (e) { result = 1; }
+          result + 10;
+        `);
+        expect(r.value).toBe(11);
+      });
+    });
+
+    describe("valid property access still works", () => {
+      it("object property read", () => {
+        expect(engine.runValue("var o = {x: 42}; o.x;").value).toBe(42);
+      });
+
+      it("array index read", () => {
+        expect(engine.runValue("[10,20,30][1]").value).toBe(20);
+      });
+
+      it("string property read", () => {
+        expect(engine.runValue("'hello'.length").value).toBe(5);
+      });
+
+      it("number property access returns undefined", () => {
+        const r = engine.runValue("var x = 42; x.foo;");
+        expect(r.tag).toBe("undefined");
+      });
+
+      it("false.constructor does not throw", () => {
+        expect(() => engine.run("false.constructor")).not.toThrow();
+      });
+    });
+  });
 });

@@ -2,6 +2,7 @@ import { FrameState } from "./frame-state.js";
 import {
   RegisterFrame,
   MAX_DEOPT_COUNT,
+  updateCallMode,
 } from "../bytecode/register/interpreter/index.js";
 import { DeoptSignal } from "./signal.js";
 import { ObjectMaterializer } from "./materializer.js";
@@ -254,6 +255,7 @@ export class Deoptimizer {
     compiledFn.deoptCount = (compiledFn.deoptCount || 0) + 1;
     dependencyRegistry.unregister(compiledFn);
     compiledFn.optimizedCode = null;
+    updateCallMode(compiledFn);
 
     const reason = this.lastDeoptReason || "unknown";
     compiledFn.lastDeoptReason = reason;

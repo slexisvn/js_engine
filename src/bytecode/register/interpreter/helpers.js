@@ -33,14 +33,13 @@ export function requiresInterpreterOnly(compiledFn) {
 }
 
 export function getBinaryOperands(frame, operands, compiledFn) {
-  const rhsReg = operands[0];
-  const fbSlotIdx = operands[1];
   const left = frame.acc;
-  const right = frame.getReg(rhsReg);
-  const slot = compiledFn.feedbackVector
-    ? compiledFn.feedbackVector.getSlot(fbSlotIdx)
-    : null;
-  if (slot) slot.recordBinaryOp(getTag(left), getTag(right));
+  const right = frame.getReg(operands[0]);
+  const fv = compiledFn.feedbackVector;
+  if (fv && !fv.saturated) {
+    const slot = fv.getSlot(operands[1]);
+    if (slot && !slot.isStable) slot.recordBinaryOp(getTag(left), getTag(right));
+  }
   return { left, right };
 }
 
