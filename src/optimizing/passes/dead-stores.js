@@ -1,10 +1,4 @@
-import {
-  IR_STORE_FIELD,
-  IR_LOAD_FIELD,
-  IR_GENERIC_CALL,
-  IR_CALL_BUILTIN,
-  IR_RETURN,
-} from "../ir/index.js";
+import * as ir from "../ir/index.js";
 import { computeDominators, buildDominatorTree } from "./dominators.js";
 
 function detachNode(node) {
@@ -28,7 +22,7 @@ export function deadStoreElimination(graph) {
     const deadStores = new Set();
 
     for (const node of block.nodes) {
-      if (node.type === IR_STORE_FIELD && node.inputs[0]) {
+      if (node.type === ir.IR_STORE_FIELD && node.inputs[0]) {
         const key = node.inputs[0].id + ":" + node.props.offset;
         const prev = lastStore.get(key);
         if (prev) {
@@ -39,16 +33,16 @@ export function deadStoreElimination(graph) {
         continue;
       }
 
-      if (node.type === IR_LOAD_FIELD && node.inputs[0]) {
+      if (node.type === ir.IR_LOAD_FIELD && node.inputs[0]) {
         const key = node.inputs[0].id + ":" + node.props.offset;
         lastStore.delete(key);
         continue;
       }
 
       if (
-        node.type === IR_GENERIC_CALL ||
-        node.type === IR_CALL_BUILTIN ||
-        node.type === IR_RETURN
+        node.type === ir.IR_GENERIC_CALL ||
+        node.type === ir.IR_CALL_BUILTIN ||
+        node.type === ir.IR_RETURN
       ) {
         lastStore.clear();
         continue;
@@ -71,16 +65,16 @@ export function deadStoreElimination(graph) {
     let hasCalls = false;
 
     for (const node of block.nodes) {
-      if (node.type === IR_STORE_FIELD && node.inputs[0]) {
+      if (node.type === ir.IR_STORE_FIELD && node.inputs[0]) {
         const key = node.inputs[0].id + ":" + node.props.offset;
         stores.set(key, node);
-      } else if (node.type === IR_LOAD_FIELD && node.inputs[0]) {
+      } else if (node.type === ir.IR_LOAD_FIELD && node.inputs[0]) {
         const key = node.inputs[0].id + ":" + node.props.offset;
         loads.add(key);
       } else if (
-        node.type === IR_GENERIC_CALL ||
-        node.type === IR_CALL_BUILTIN ||
-        node.type === IR_RETURN
+        node.type === ir.IR_GENERIC_CALL ||
+        node.type === ir.IR_CALL_BUILTIN ||
+        node.type === ir.IR_RETURN
       ) {
         hasCalls = true;
       }
@@ -113,7 +107,7 @@ export function deadStoreElimination(graph) {
           let storeBeforeLoad = false;
           for (const node of succ.nodes) {
             if (
-              node.type === IR_STORE_FIELD &&
+              node.type === ir.IR_STORE_FIELD &&
               node.inputs[0] &&
               node.inputs[0].id + ":" + node.props.offset === key
             ) {
@@ -121,7 +115,7 @@ export function deadStoreElimination(graph) {
               break;
             }
             if (
-              node.type === IR_LOAD_FIELD &&
+              node.type === ir.IR_LOAD_FIELD &&
               node.inputs[0] &&
               node.inputs[0].id + ":" + node.props.offset === key
             ) {
@@ -141,15 +135,15 @@ export function deadStoreElimination(graph) {
           let callBeforeStore = false;
           for (const node of succ.nodes) {
             if (
-              node.type === IR_GENERIC_CALL ||
-              node.type === IR_CALL_BUILTIN ||
-              node.type === IR_RETURN
+              node.type === ir.IR_GENERIC_CALL ||
+              node.type === ir.IR_CALL_BUILTIN ||
+              node.type === ir.IR_RETURN
             ) {
               callBeforeStore = true;
               break;
             }
             if (
-              node.type === IR_STORE_FIELD &&
+              node.type === ir.IR_STORE_FIELD &&
               node.inputs[0] &&
               node.inputs[0].id + ":" + node.props.offset === key
             ) {

@@ -1,30 +1,4 @@
-import {
-  IR_CHECK_SMI,
-  IR_CHECK_NUMBER,
-  IR_CHECK_MAP,
-  IR_GENERIC_ADD,
-  IR_GENERIC_SUB,
-  IR_GENERIC_MUL,
-  IR_GENERIC_DIV,
-  IR_GENERIC_MOD,
-  IR_GENERIC_COMPARE,
-  IR_INT32_ADD,
-  IR_INT32_SUB,
-  IR_INT32_MUL,
-  IR_INT32_DIV,
-  IR_INT32_MOD,
-  IR_INT32_COMPARE,
-  IR_FLOAT64_ADD,
-  IR_FLOAT64_SUB,
-  IR_FLOAT64_MUL,
-  IR_FLOAT64_DIV,
-  IR_FLOAT64_COMPARE,
-  IR_TYPEOF,
-  IR_NOT,
-  IR_CONSTANT,
-  IR_BRANCH,
-  IR_BLOCK_PARAM,
-} from "../ir/index.js";
+import * as ir from "../ir/index.js";
 import { computeDominators, buildDominatorTree } from "./dominators.js";
 import { tracer } from "../../core/tracing/index.js";
 import {
@@ -42,20 +16,20 @@ import {
 } from "../types/lattice.js";
 
 const GENERIC_TO_INT32 = {
-  [IR_GENERIC_ADD]: IR_INT32_ADD,
-  [IR_GENERIC_SUB]: IR_INT32_SUB,
-  [IR_GENERIC_MUL]: IR_INT32_MUL,
-  [IR_GENERIC_DIV]: IR_INT32_DIV,
-  [IR_GENERIC_MOD]: IR_INT32_MOD,
-  [IR_GENERIC_COMPARE]: IR_INT32_COMPARE,
+  [ir.IR_GENERIC_ADD]: ir.IR_INT32_ADD,
+  [ir.IR_GENERIC_SUB]: ir.IR_INT32_SUB,
+  [ir.IR_GENERIC_MUL]: ir.IR_INT32_MUL,
+  [ir.IR_GENERIC_DIV]: ir.IR_INT32_DIV,
+  [ir.IR_GENERIC_MOD]: ir.IR_INT32_MOD,
+  [ir.IR_GENERIC_COMPARE]: ir.IR_INT32_COMPARE,
 };
 
 const GENERIC_TO_FLOAT64 = {
-  [IR_GENERIC_ADD]: IR_FLOAT64_ADD,
-  [IR_GENERIC_SUB]: IR_FLOAT64_SUB,
-  [IR_GENERIC_MUL]: IR_FLOAT64_MUL,
-  [IR_GENERIC_DIV]: IR_FLOAT64_DIV,
-  [IR_GENERIC_COMPARE]: IR_FLOAT64_COMPARE,
+  [ir.IR_GENERIC_ADD]: ir.IR_FLOAT64_ADD,
+  [ir.IR_GENERIC_SUB]: ir.IR_FLOAT64_SUB,
+  [ir.IR_GENERIC_MUL]: ir.IR_FLOAT64_MUL,
+  [ir.IR_GENERIC_DIV]: ir.IR_FLOAT64_DIV,
+  [ir.IR_GENERIC_COMPARE]: ir.IR_FLOAT64_COMPARE,
 };
 
 export function typeNarrowing(graph) {
@@ -109,21 +83,21 @@ function mergeBlockParams(block, facts) {
 }
 
 function recordNodeType(node, facts) {
-  if (node.type === IR_CHECK_SMI && node.inputs[0]) {
+  if (node.type === ir.IR_CHECK_SMI && node.inputs[0]) {
     const narrowed = narrowType(facts.get(node.inputs[0].id), smiType());
     facts.set(node.inputs[0].id, narrowed);
     facts.set(node.id, narrowed);
     return;
   }
 
-  if (node.type === IR_CHECK_NUMBER && node.inputs[0]) {
+  if (node.type === ir.IR_CHECK_NUMBER && node.inputs[0]) {
     const narrowed = narrowType(facts.get(node.inputs[0].id), numberType());
     facts.set(node.inputs[0].id, narrowed);
     facts.set(node.id, narrowed);
     return;
   }
 
-  if (node.type === IR_CHECK_MAP && node.inputs[0]) {
+  if (node.type === ir.IR_CHECK_MAP && node.inputs[0]) {
     const narrowed = narrowType(
       facts.get(node.inputs[0].id),
       objectType(node.props.expectedMapId ?? null),
@@ -133,22 +107,22 @@ function recordNodeType(node, facts) {
     return;
   }
 
-  if (node.type === IR_CONSTANT) {
+  if (node.type === ir.IR_CONSTANT) {
     facts.set(node.id, typeFromConstant(node.props.value));
     return;
   }
 
-  if (node.type === IR_NOT) {
+  if (node.type === ir.IR_NOT) {
     facts.set(node.id, booleanType());
     return;
   }
 
-  if (node.type === IR_TYPEOF) {
+  if (node.type === ir.IR_TYPEOF) {
     facts.set(node.id, stringType());
     return;
   }
 
-  if (node.type === IR_BLOCK_PARAM) {
+  if (node.type === ir.IR_BLOCK_PARAM) {
     let merged = null;
     for (const input of node.inputs || [])
       merged = joinTypes(
@@ -164,14 +138,14 @@ function inferValueType(value, facts, seen = new Set()) {
   if (existing) return existing;
   if (seen.has(value.id)) return null;
   seen.add(value.id);
-  if (value.type === IR_CONSTANT) return typeFromConstant(value.props.value);
-  if (value.type === IR_CHECK_SMI) return smiType();
-  if (value.type === IR_CHECK_NUMBER) return numberType();
-  if (value.type === IR_CHECK_MAP)
+  if (value.type === ir.IR_CONSTANT) return typeFromConstant(value.props.value);
+  if (value.type === ir.IR_CHECK_SMI) return smiType();
+  if (value.type === ir.IR_CHECK_NUMBER) return numberType();
+  if (value.type === ir.IR_CHECK_MAP)
     return objectType(value.props.expectedMapId ?? null);
-  if (value.type === IR_NOT) return booleanType();
-  if (value.type === IR_TYPEOF) return stringType();
-  if (value.type === IR_BLOCK_PARAM) {
+  if (value.type === ir.IR_NOT) return booleanType();
+  if (value.type === ir.IR_TYPEOF) return stringType();
+  if (value.type === ir.IR_BLOCK_PARAM) {
     let merged = null;
     for (const input of value.inputs || [])
       merged = joinTypes(merged, inferValueType(input, facts, seen));
@@ -185,7 +159,7 @@ function factsForDominatorChild(block, child, facts) {
   const terminator = block.getTerminator
     ? block.getTerminator()
     : block.nodes[block.nodes.length - 1];
-  if (!terminator || terminator.type !== IR_BRANCH) return next;
+  if (!terminator || terminator.type !== ir.IR_BRANCH) return next;
   if (terminator.props.trueBlock === child.id) {
     recordBranchFact(terminator, next, true);
   } else if (terminator.props.falseBlock === child.id) {
@@ -197,14 +171,14 @@ function factsForDominatorChild(block, child, facts) {
 function extractTypeofComparison(branch) {
   if (!branch.inputs[0]) return null;
   const condition = branch.inputs[0];
-  if (condition.type !== IR_INT32_COMPARE || condition.inputs.length !== 2)
+  if (condition.type !== ir.IR_INT32_COMPARE || condition.inputs.length !== 2)
     return null;
   const { op } = condition.props;
   if (op !== "==" && op !== "===") return null;
   const [left, right] = condition.inputs;
   if (
-    left.type === IR_TYPEOF &&
-    right.type === IR_CONSTANT &&
+    left.type === ir.IR_TYPEOF &&
+    right.type === ir.IR_CONSTANT &&
     typeof right.props.value === "string" &&
     left.inputs[0]
   ) {

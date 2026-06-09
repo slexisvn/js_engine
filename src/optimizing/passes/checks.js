@@ -1,28 +1,4 @@
-import {
-  irConstant,
-  IR_CHECK_MAP,
-  IR_CHECK_SMI,
-  IR_CHECK_NUMBER,
-  IR_CHECK_ELEMENTS_KIND,
-  IR_CHECK_BOUNDS,
-  IR_INT32_ADD,
-  IR_INT32_SUB,
-  IR_INT32_MUL,
-  IR_INT32_DIV,
-  IR_INT32_MOD,
-  IR_INT32_COMPARE,
-  IR_FLOAT64_COMPARE,
-  IR_CONSTANT,
-  IR_PARAMETER,
-  IR_PHI,
-  IR_LOAD_FIELD,
-  IR_LOAD_ELEMENT,
-  IR_RETURN,
-  IR_BRANCH,
-  IR_JUMP,
-  IR_DEOPTIMIZE,
-  IR_STORE_FIELD,
-} from "../ir/index.js";
+import * as ir from "../ir/index.js";
 
 import { tracer } from "../../core/tracing/index.js";
 import { computeDominators, buildDominatorTree } from "./dominators.js";
@@ -76,8 +52,8 @@ function rewriteBranchAsJump(
   blockById,
 ) {
   detachInputs(term);
-  term.type = IR_JUMP;
-  term.opcode = IR_JUMP;
+  term.type = ir.IR_JUMP;
+  term.opcode = ir.IR_JUMP;
   term.props = { targetBlock: targetBlockId };
   term.metadata = term.props;
   block.successors = block.successors.filter(
@@ -102,13 +78,13 @@ export function eliminateRedundantChecks(graph) {
   let elimCount = 0;
 
   const checkKey = (node) => {
-    if (node.type === IR_CHECK_MAP && node.inputs[0]) {
+    if (node.type === ir.IR_CHECK_MAP && node.inputs[0]) {
       return `map_${node.inputs[0].id}_${node.props.expectedMapId}_${node.props.expectedMapVersion ?? "any"}`;
-    } else if (node.type === IR_CHECK_SMI && node.inputs[0]) {
+    } else if (node.type === ir.IR_CHECK_SMI && node.inputs[0]) {
       return `smi_${node.inputs[0].id}`;
-    } else if (node.type === IR_CHECK_NUMBER && node.inputs[0]) {
+    } else if (node.type === ir.IR_CHECK_NUMBER && node.inputs[0]) {
       return `num_${node.inputs[0].id}`;
-    } else if (node.type === IR_CHECK_ELEMENTS_KIND && node.inputs[0]) {
+    } else if (node.type === ir.IR_CHECK_ELEMENTS_KIND && node.inputs[0]) {
       return `elements_${node.inputs[0].id}_${node.props.elementsKind}`;
     }
     return null;
@@ -162,33 +138,33 @@ export function rangeAnalysisAndBoundsCheckElimination(graph) {
   for (const block of graph.blocks) {
     for (const node of block.nodes) {
       switch (node.type) {
-        case IR_CONSTANT: {
+        case ir.IR_CONSTANT: {
           const v = node.props.value;
           if (typeof v === "number" && Number.isInteger(v)) {
             setRange(node.id, v, v);
           }
           break;
         }
-        case IR_PARAMETER:
+        case ir.IR_PARAMETER:
           setRange(node.id, NEG_INF, INF);
           break;
 
-        case IR_CHECK_SMI:
-        case IR_CHECK_NUMBER: {
+        case ir.IR_CHECK_SMI:
+        case ir.IR_CHECK_NUMBER: {
           if (node.inputs[0]) {
             const r = getRange(node.inputs[0].id);
             setRange(node.id, r.min, r.max);
           }
           break;
         }
-        case IR_CHECK_ELEMENTS_KIND:
+        case ir.IR_CHECK_ELEMENTS_KIND:
           if (node.inputs[0]) {
             const r = getRange(node.inputs[0].id);
             setRange(node.id, r.min, r.max);
           }
           break;
 
-        case IR_INT32_ADD: {
+        case ir.IR_INT32_ADD: {
           if (node.inputs.length === 2) {
             const l = getRange(node.inputs[0].id);
             const r = getRange(node.inputs[1].id);
@@ -202,7 +178,7 @@ export function rangeAnalysisAndBoundsCheckElimination(graph) {
           }
           break;
         }
-        case IR_INT32_SUB: {
+        case ir.IR_INT32_SUB: {
           if (node.inputs.length === 2) {
             const l = getRange(node.inputs[0].id);
             const r = getRange(node.inputs[1].id);
@@ -216,7 +192,7 @@ export function rangeAnalysisAndBoundsCheckElimination(graph) {
           }
           break;
         }
-        case IR_INT32_MUL: {
+        case ir.IR_INT32_MUL: {
           if (node.inputs.length === 2) {
             const l = getRange(node.inputs[0].id);
             const r = getRange(node.inputs[1].id);
@@ -272,7 +248,7 @@ export function rangeAnalysisAndBoundsCheckElimination(graph) {
           }
           break;
         }
-        case IR_INT32_DIV: {
+        case ir.IR_INT32_DIV: {
           if (node.inputs.length === 2) {
             const l = getRange(node.inputs[0].id);
             const r = getRange(node.inputs[1].id);
@@ -318,7 +294,7 @@ export function rangeAnalysisAndBoundsCheckElimination(graph) {
           }
           break;
         }
-        case IR_INT32_MOD: {
+        case ir.IR_INT32_MOD: {
           if (node.inputs.length === 2) {
             const l = getRange(node.inputs[0].id);
             const r = getRange(node.inputs[1].id);
@@ -334,7 +310,7 @@ export function rangeAnalysisAndBoundsCheckElimination(graph) {
           break;
         }
 
-        case IR_PHI: {
+        case ir.IR_PHI: {
           let lo = INF,
             hi = NEG_INF;
           for (const inp of node.inputs) {
@@ -346,8 +322,8 @@ export function rangeAnalysisAndBoundsCheckElimination(graph) {
           break;
         }
 
-        case IR_LOAD_FIELD:
-        case IR_LOAD_ELEMENT:
+        case ir.IR_LOAD_FIELD:
+        case ir.IR_LOAD_ELEMENT:
           setRange(node.id, NEG_INF, INF);
           break;
       }
@@ -372,13 +348,13 @@ export function rangeAnalysisAndBoundsCheckElimination(graph) {
 
   for (const block of graph.blocks) {
     const term = block.nodes[block.nodes.length - 1];
-    if (!term || term.type !== IR_BRANCH) continue;
+    if (!term || term.type !== ir.IR_BRANCH) continue;
     if (!term.inputs[0]) continue;
 
     const cmpNode = term.inputs[0];
     if (
-      cmpNode.type !== IR_INT32_COMPARE &&
-      cmpNode.type !== IR_FLOAT64_COMPARE
+      cmpNode.type !== ir.IR_INT32_COMPARE &&
+      cmpNode.type !== ir.IR_FLOAT64_COMPARE
     )
       continue;
     if (cmpNode.inputs.length < 2) continue;
@@ -428,9 +404,9 @@ export function rangeAnalysisAndBoundsCheckElimination(graph) {
   for (const block of graph.blocks) {
     for (const node of block.nodes) {
       if (
-        node.type === IR_INT32_ADD ||
-        node.type === IR_INT32_SUB ||
-        node.type === IR_INT32_MUL
+        node.type === ir.IR_INT32_ADD ||
+        node.type === ir.IR_INT32_SUB ||
+        node.type === ir.IR_INT32_MUL
       ) {
         const r = getRange(node.id);
         if (
@@ -449,10 +425,10 @@ export function rangeAnalysisAndBoundsCheckElimination(graph) {
   let branchElimCount = 0;
   for (const block of graph.blocks) {
     const term = block.nodes[block.nodes.length - 1];
-    if (!term || term.type !== IR_BRANCH) continue;
+    if (!term || term.type !== ir.IR_BRANCH) continue;
     if (!term.inputs[0]) continue;
     const cmpNode = term.inputs[0];
-    if (cmpNode.type !== IR_INT32_COMPARE) continue;
+    if (cmpNode.type !== ir.IR_INT32_COMPARE) continue;
     if (cmpNode.inputs.length < 2) continue;
 
     const op = cmpNode.props.op;
@@ -516,18 +492,18 @@ export function rangeAnalysisAndBoundsCheckElimination(graph) {
   const boundsChecksToRemove = [];
 
   function detectInductionVariable(phiNode) {
-    if (phiNode.type !== IR_PHI || phiNode.inputs.length !== 2) return null;
+    if (phiNode.type !== ir.IR_PHI || phiNode.inputs.length !== 2) return null;
 
     const inp0 = phiNode.inputs[0];
     const inp1 = phiNode.inputs[1];
     let initNode = null,
       stepNode = null;
 
-    if (inp1.type === IR_INT32_ADD && inp1.inputs.some((i) => i === phiNode)) {
+    if (inp1.type === ir.IR_INT32_ADD && inp1.inputs.some((i) => i === phiNode)) {
       initNode = inp0;
       stepNode = inp1;
     } else if (
-      inp0.type === IR_INT32_ADD &&
+      inp0.type === ir.IR_INT32_ADD &&
       inp0.inputs.some((i) => i === phiNode)
     ) {
       initNode = inp1;
@@ -550,9 +526,9 @@ export function rangeAnalysisAndBoundsCheckElimination(graph) {
   const loopGuardIndex = new Map();
   for (const b of graph.blocks) {
     const term = b.nodes[b.nodes.length - 1];
-    if (!term || term.type !== IR_BRANCH || !term.inputs[0]) continue;
+    if (!term || term.type !== ir.IR_BRANCH || !term.inputs[0]) continue;
     const cmp = term.inputs[0];
-    if (cmp.type !== IR_INT32_COMPARE && cmp.type !== IR_FLOAT64_COMPARE)
+    if (cmp.type !== ir.IR_INT32_COMPARE && cmp.type !== ir.IR_FLOAT64_COMPARE)
       continue;
     if (cmp.inputs.length < 2) continue;
     if (cmp.props.op !== "<" && cmp.props.op !== "<=") continue;
@@ -586,7 +562,7 @@ export function rangeAnalysisAndBoundsCheckElimination(graph) {
   for (const block of graph.blocks) {
     for (let i = 0; i < block.nodes.length; i++) {
       const node = block.nodes[i];
-      if (node.type !== IR_CHECK_BOUNDS) continue;
+      if (node.type !== ir.IR_CHECK_BOUNDS) continue;
       if (node.inputs.length < 2) continue;
 
       const indexNode = node.inputs[0];
@@ -598,11 +574,11 @@ export function rangeAnalysisAndBoundsCheckElimination(graph) {
 
         for (const pred of block.predecessors) {
           const predTerm = pred.nodes[pred.nodes.length - 1];
-          if (predTerm && predTerm.type === IR_BRANCH && predTerm.inputs[0]) {
+          if (predTerm && predTerm.type === ir.IR_BRANCH && predTerm.inputs[0]) {
             const cmp = predTerm.inputs[0];
             if (
-              (cmp.type === IR_INT32_COMPARE ||
-                cmp.type === IR_FLOAT64_COMPARE) &&
+              (cmp.type === ir.IR_INT32_COMPARE ||
+                cmp.type === ir.IR_FLOAT64_COMPARE) &&
               (cmp.props.op === "<" || cmp.props.op === "<=") &&
               cmp.inputs[0] &&
               cmp.inputs[1]
@@ -696,12 +672,12 @@ function isDeadPureNode(node) {
   if (node.inputs.length === 0) return false;
   if (node.effectKind !== "none") return false;
   return (
-    node.type !== IR_RETURN &&
-    node.type !== IR_BRANCH &&
-    node.type !== IR_JUMP &&
-    node.type !== IR_DEOPTIMIZE &&
-    node.type !== IR_PARAMETER &&
-    node.type !== IR_CONSTANT &&
-    node.type !== IR_PHI
+    node.type !== ir.IR_RETURN &&
+    node.type !== ir.IR_BRANCH &&
+    node.type !== ir.IR_JUMP &&
+    node.type !== ir.IR_DEOPTIMIZE &&
+    node.type !== ir.IR_PARAMETER &&
+    node.type !== ir.IR_CONSTANT &&
+    node.type !== ir.IR_PHI
   );
 }

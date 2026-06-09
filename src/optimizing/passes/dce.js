@@ -1,4 +1,4 @@
-import { EFFECT_NONE, EFFECT_READ } from "../ir/index.js";
+import * as ir from "../ir/index.js";
 import { markFrameStateValues } from "./frame-state-values.js";
 
 export function deadCodeElimination(graph) {
@@ -58,7 +58,7 @@ export function deadCodeElimination(graph) {
 }
 
 function isRequiredEffect(node) {
-  return node.effectKind !== EFFECT_NONE && node.effectKind !== EFFECT_READ;
+  return node.effectKind !== ir.EFFECT_NONE && node.effectKind !== ir.EFFECT_READ;
 }
 
 export function eliminateUnreachableBlocks(graph) {

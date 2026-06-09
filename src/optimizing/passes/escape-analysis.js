@@ -1,19 +1,4 @@
-import {
-  irConstant,
-  IR_NEW_OBJECT,
-  IR_NEW_ARRAY,
-  IR_GENERIC_SET_PROP,
-  IR_GENERIC_GET_PROP,
-  IR_GENERIC_SET_INDEX,
-  IR_GENERIC_GET_INDEX,
-  IR_STORE_ELEMENT,
-  IR_LOAD_ELEMENT,
-  IR_CHECK_MAP,
-  IR_CHECK_ARRAY,
-  IR_STORE_FIELD,
-  IR_LOAD_FIELD,
-  IR_PHI,
-} from "../ir/index.js";
+import * as ir from "../ir/index.js";
 
 import { tracer } from "../../core/tracing/index.js";
 import {
@@ -38,7 +23,7 @@ export function escapeAnalysisAndScalarReplacement(graph) {
   const allocations = [];
   for (const block of graph.blocks) {
     for (const node of block.nodes) {
-      if (node.type === IR_NEW_OBJECT || node.type === IR_NEW_ARRAY) {
+      if (node.type === ir.IR_NEW_OBJECT || node.type === ir.IR_NEW_ARRAY) {
         allocations.push(node);
       }
     }
@@ -103,13 +88,13 @@ export function escapeAnalysisAndScalarReplacement(graph) {
         if (!safeUses.has(node)) continue;
 
         if (
-          node.type === IR_CHECK_MAP ||
-          node.type === IR_CHECK_ARRAY ||
-          node.type === IR_PHI
+          node.type === ir.IR_CHECK_MAP ||
+          node.type === ir.IR_CHECK_ARRAY ||
+          node.type === ir.IR_PHI
         ) {
           toDelete.add(node.id);
         } else if (
-          node.type === IR_STORE_FIELD &&
+          node.type === ir.IR_STORE_FIELD &&
           toDelete.has(node.inputs[0]?.id)
         ) {
           const offset = node.props.offset;
@@ -117,7 +102,7 @@ export function escapeAnalysisAndScalarReplacement(graph) {
           offsetState.set(offset, value);
           toDelete.add(node.id);
         } else if (
-          node.type === IR_LOAD_FIELD &&
+          node.type === ir.IR_LOAD_FIELD &&
           toDelete.has(node.inputs[0]?.id)
         ) {
           const offset = node.props.offset;
@@ -131,7 +116,7 @@ export function escapeAnalysisAndScalarReplacement(graph) {
           replaceGraphFrameStateValue(graph, node, val);
           toDelete.add(node.id);
         } else if (
-          node.type === IR_GENERIC_SET_PROP &&
+          node.type === ir.IR_GENERIC_SET_PROP &&
           toDelete.has(node.inputs[0]?.id)
         ) {
           const propName = node.props.propName;
@@ -139,7 +124,7 @@ export function escapeAnalysisAndScalarReplacement(graph) {
           propState.set(propName, value);
           toDelete.add(node.id);
         } else if (
-          node.type === IR_GENERIC_GET_PROP &&
+          node.type === ir.IR_GENERIC_GET_PROP &&
           toDelete.has(node.inputs[0]?.id)
         ) {
           const propName = node.props.propName;
@@ -153,8 +138,8 @@ export function escapeAnalysisAndScalarReplacement(graph) {
           replaceGraphFrameStateValue(graph, node, val);
           toDelete.add(node.id);
         } else if (
-          (node.type === IR_STORE_ELEMENT ||
-            node.type === IR_GENERIC_SET_INDEX) &&
+          (node.type === ir.IR_STORE_ELEMENT ||
+            node.type === ir.IR_GENERIC_SET_INDEX) &&
           toDelete.has(node.inputs[0]?.id)
         ) {
           const idx =
@@ -164,14 +149,14 @@ export function escapeAnalysisAndScalarReplacement(graph) {
                 ? node.inputs[1].id
                 : 0;
           const value =
-            node.type === IR_STORE_ELEMENT ? node.inputs[2] : node.inputs[2];
+            node.type === ir.IR_STORE_ELEMENT ? node.inputs[2] : node.inputs[2];
           if (value) {
             offsetState.set("elem_" + idx, value);
             toDelete.add(node.id);
           }
         } else if (
-          (node.type === IR_LOAD_ELEMENT ||
-            node.type === IR_GENERIC_GET_INDEX) &&
+          (node.type === ir.IR_LOAD_ELEMENT ||
+            node.type === ir.IR_GENERIC_GET_INDEX) &&
           toDelete.has(node.inputs[0]?.id)
         ) {
           const idx =
@@ -218,45 +203,45 @@ export function escapeAnalysisAndScalarReplacement(graph) {
 
 function isPropertyUse(node, aliases) {
   return (
-    (node.type === IR_GENERIC_SET_PROP || node.type === IR_GENERIC_GET_PROP) &&
+    (node.type === ir.IR_GENERIC_SET_PROP || node.type === ir.IR_GENERIC_GET_PROP) &&
     aliases.has(node.inputs[0])
   );
 }
 
 function isElementUse(node, aliases) {
   return (
-    (node.type === IR_GENERIC_SET_INDEX ||
-      node.type === IR_GENERIC_GET_INDEX ||
-      node.type === IR_STORE_ELEMENT ||
-      node.type === IR_LOAD_ELEMENT) &&
+    (node.type === ir.IR_GENERIC_SET_INDEX ||
+      node.type === ir.IR_GENERIC_GET_INDEX ||
+      node.type === ir.IR_STORE_ELEMENT ||
+      node.type === ir.IR_LOAD_ELEMENT) &&
     aliases.has(node.inputs[0])
   );
 }
 
 function isFieldUse(node, aliases) {
   return (
-    (node.type === IR_STORE_FIELD || node.type === IR_LOAD_FIELD) &&
+    (node.type === ir.IR_STORE_FIELD || node.type === ir.IR_LOAD_FIELD) &&
     aliases.has(node.inputs[0])
   );
 }
 
 function isReferenceGuard(node, aliases) {
   return (
-    (node.type === IR_CHECK_MAP || node.type === IR_CHECK_ARRAY) &&
+    (node.type === ir.IR_CHECK_MAP || node.type === ir.IR_CHECK_ARRAY) &&
     aliases.has(node.inputs[0])
   );
 }
 
 function isSameReferencePhi(node, aliases) {
   return (
-    node.type === IR_PHI &&
+    node.type === ir.IR_PHI &&
     node.inputs.length > 0 &&
     node.inputs.every((input) => aliases.has(input))
   );
 }
 
 function insertUndefinedConstant(block, index) {
-  const value = irConstant(undefined);
+  const value = ir.irConstant(undefined);
   value.block = block;
   block.nodes.splice(index, 0, value);
   return value;

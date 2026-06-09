@@ -1,24 +1,14 @@
-import {
-  IR_LOAD_FIELD,
-  IR_STORE_FIELD,
-  IR_GENERIC_CALL,
-  IR_CALL_BUILTIN,
-  IR_CALL_KNOWN_FUNCTION,
-  IR_GENERIC_SET_PROP,
-  IR_GENERIC_SET_INDEX,
-  IR_NEW_OBJECT,
-  IR_NEW_ARRAY,
-} from "../ir/index.js";
+import * as ir from "../ir/index.js";
 import { computeDominators, buildDominatorTree } from "./dominators.js";
 import { replaceGraphFrameStateValue } from "./frame-state-values.js";
 
 const CALL_LIKE = new Set([
-  IR_GENERIC_CALL,
-  IR_CALL_BUILTIN,
-  IR_CALL_KNOWN_FUNCTION,
+  ir.IR_GENERIC_CALL,
+  ir.IR_CALL_BUILTIN,
+  ir.IR_CALL_KNOWN_FUNCTION,
 ]);
 
-const ARBITRARY_WRITE = new Set([IR_GENERIC_SET_PROP, IR_GENERIC_SET_INDEX]);
+const ARBITRARY_WRITE = new Set([ir.IR_GENERIC_SET_PROP, ir.IR_GENERIC_SET_INDEX]);
 
 function cloneState(state) {
   const copy = new Map();
@@ -62,7 +52,7 @@ export function loadElimination(graph) {
   const escapedAllocations = new Set();
   for (const block of graph.blocks) {
     for (const node of block.nodes) {
-      if (node.type === IR_NEW_OBJECT || node.type === IR_NEW_ARRAY) {
+      if (node.type === ir.IR_NEW_OBJECT || node.type === ir.IR_NEW_ARRAY) {
         freshAllocations.add(node.id);
       }
     }
@@ -99,7 +89,7 @@ export function loadElimination(graph) {
     const nodesToRemove = [];
 
     for (const node of block.nodes) {
-      if (node.type === IR_STORE_FIELD) {
+      if (node.type === ir.IR_STORE_FIELD) {
         const obj = node.inputs[0];
         const val = node.inputs[1];
         const offset = node.props.offset;
@@ -124,7 +114,7 @@ export function loadElimination(graph) {
         continue;
       }
 
-      if (node.type === IR_LOAD_FIELD) {
+      if (node.type === ir.IR_LOAD_FIELD) {
         const obj = node.inputs[0];
         const offset = node.props.offset;
         if (obj && offset !== undefined) {

@@ -1,70 +1,4 @@
-import {
-  IR_PARAMETER,
-  IR_CONSTANT,
-  IR_INT32_ADD,
-  IR_INT32_SUB,
-  IR_INT32_MUL,
-  IR_INT32_DIV,
-  IR_INT32_MOD,
-  IR_INT32_SHL,
-  IR_INT32_SHR,
-  IR_INT32_AND,
-  IR_FLOAT64_ADD,
-  IR_FLOAT64_SUB,
-  IR_FLOAT64_MUL,
-  IR_FLOAT64_DIV,
-  IR_INT32_COMPARE,
-  IR_FLOAT64_COMPARE,
-  IR_CHECK_SMI,
-  IR_CHECK_NUMBER,
-  IR_CHECK_MAP,
-  IR_CHECK_ARRAY,
-  IR_CHECK_ELEMENTS_KIND,
-  IR_CHECK_BOUNDS,
-  IR_CHECK_CALL_TARGET,
-  IR_LOAD_FIELD,
-  IR_POLYMORPHIC_LOAD,
-  IR_LOAD_ARRAY_LENGTH,
-  IR_LOAD_ELEMENT,
-  IR_LOAD_GLOBAL,
-  IR_STORE_GLOBAL,
-  IR_LOAD_LOCAL,
-  IR_LOAD_CONST,
-  IR_STORE_FIELD,
-  IR_STORE_ELEMENT,
-  IR_GENERIC_ADD,
-  IR_GENERIC_SUB,
-  IR_GENERIC_MUL,
-  IR_GENERIC_DIV,
-  IR_GENERIC_MOD,
-  IR_GENERIC_COMPARE,
-  IR_GENERIC_GET_PROP,
-  IR_GENERIC_SET_PROP,
-  IR_GENERIC_CALL,
-  IR_GENERIC_GET_INDEX,
-  IR_GENERIC_SET_INDEX,
-  IR_GENERIC_BITAND,
-  IR_GENERIC_BITOR,
-  IR_GENERIC_BITXOR,
-  IR_GENERIC_SHL,
-  IR_GENERIC_SHR,
-  IR_GENERIC_USHR,
-  IR_GENERIC_POW,
-  IR_GENERIC_BITNOT,
-  IR_NEW_OBJECT,
-  IR_NEW_ARRAY,
-  IR_CALL_BUILTIN,
-  IR_TYPEOF,
-  IR_NOT,
-  IR_NEG,
-  IR_RETURN,
-  IR_BRANCH,
-  IR_PHI,
-  IR_BOX,
-  IR_UNBOX,
-  irBox,
-  irUnbox,
-} from "../ir/index.js";
+import * as ir from "../ir/index.js";
 
 export const REP_INT32 = "int32";
 export const REP_FLOAT64 = "float64";
@@ -74,80 +8,80 @@ export const REP_BOOL = "bool";
 
 export function representationSelection(graph) {
   const INT32_PRODUCERS = new Set([
-    IR_INT32_ADD,
-    IR_INT32_SUB,
-    IR_INT32_MUL,
-    IR_INT32_DIV,
-    IR_INT32_MOD,
-    IR_INT32_SHL,
-    IR_INT32_SHR,
-    IR_INT32_AND,
-    IR_LOAD_ARRAY_LENGTH,
-    IR_GENERIC_BITAND,
-    IR_GENERIC_BITOR,
-    IR_GENERIC_BITXOR,
-    IR_GENERIC_SHL,
-    IR_GENERIC_SHR,
-    IR_GENERIC_BITNOT,
+    ir.IR_INT32_ADD,
+    ir.IR_INT32_SUB,
+    ir.IR_INT32_MUL,
+    ir.IR_INT32_DIV,
+    ir.IR_INT32_MOD,
+    ir.IR_INT32_SHL,
+    ir.IR_INT32_SHR,
+    ir.IR_INT32_AND,
+    ir.IR_LOAD_ARRAY_LENGTH,
+    ir.IR_GENERIC_BITAND,
+    ir.IR_GENERIC_BITOR,
+    ir.IR_GENERIC_BITXOR,
+    ir.IR_GENERIC_SHL,
+    ir.IR_GENERIC_SHR,
+    ir.IR_GENERIC_BITNOT,
   ]);
 
   const BOOL_PRODUCERS = new Set([
-    IR_INT32_COMPARE,
-    IR_FLOAT64_COMPARE,
-    IR_GENERIC_COMPARE,
-    IR_CHECK_CALL_TARGET,
-    IR_NOT,
+    ir.IR_INT32_COMPARE,
+    ir.IR_FLOAT64_COMPARE,
+    ir.IR_GENERIC_COMPARE,
+    ir.IR_CHECK_CALL_TARGET,
+    ir.IR_NOT,
   ]);
 
   const FLOAT64_PRODUCERS = new Set([
-    IR_FLOAT64_ADD,
-    IR_FLOAT64_SUB,
-    IR_FLOAT64_MUL,
-    IR_FLOAT64_DIV,
+    ir.IR_FLOAT64_ADD,
+    ir.IR_FLOAT64_SUB,
+    ir.IR_FLOAT64_MUL,
+    ir.IR_FLOAT64_DIV,
   ]);
 
   const INT32_CONSUMERS = new Set([
-    IR_INT32_ADD,
-    IR_INT32_SUB,
-    IR_INT32_MUL,
-    IR_INT32_DIV,
-    IR_INT32_MOD,
-    IR_INT32_SHL,
-    IR_INT32_SHR,
-    IR_INT32_AND,
-    IR_INT32_COMPARE,
+    ir.IR_INT32_ADD,
+    ir.IR_INT32_SUB,
+    ir.IR_INT32_MUL,
+    ir.IR_INT32_DIV,
+    ir.IR_INT32_MOD,
+    ir.IR_INT32_SHL,
+    ir.IR_INT32_SHR,
+    ir.IR_INT32_AND,
+    ir.IR_INT32_COMPARE,
   ]);
 
   const FLOAT64_CONSUMERS = new Set([
-    IR_FLOAT64_ADD,
-    IR_FLOAT64_SUB,
-    IR_FLOAT64_MUL,
-    IR_FLOAT64_DIV,
-    IR_FLOAT64_COMPARE,
+    ir.IR_FLOAT64_ADD,
+    ir.IR_FLOAT64_SUB,
+    ir.IR_FLOAT64_MUL,
+    ir.IR_FLOAT64_DIV,
+    ir.IR_FLOAT64_COMPARE,
   ]);
 
   const TAGGED_NUMBER_PRODUCERS = new Set([
-    IR_GENERIC_SUB,
-    IR_GENERIC_MUL,
-    IR_GENERIC_DIV,
-    IR_GENERIC_MOD,
-    IR_GENERIC_USHR,
-    IR_GENERIC_POW,
+    ir.IR_GENERIC_SUB,
+    ir.IR_GENERIC_MUL,
+    ir.IR_GENERIC_DIV,
+    ir.IR_GENERIC_MOD,
+    ir.IR_GENERIC_USHR,
+    ir.IR_GENERIC_POW,
   ]);
 
   const HANDLE_PRODUCERS = new Set([
-    IR_GENERIC_ADD,
-    IR_GENERIC_GET_PROP,
-    IR_GENERIC_SET_PROP,
-    IR_GENERIC_GET_INDEX,
-    IR_GENERIC_SET_INDEX,
-    IR_LOAD_GLOBAL,
-    IR_LOAD_LOCAL,
-    IR_LOAD_CONST,
-    IR_NEW_OBJECT,
-    IR_NEW_ARRAY,
-    IR_CALL_BUILTIN,
-    IR_TYPEOF,
+    ir.IR_GENERIC_ADD,
+    ir.IR_GENERIC_GET_PROP,
+    ir.IR_GENERIC_SET_PROP,
+    ir.IR_GENERIC_GET_INDEX,
+    ir.IR_GENERIC_SET_INDEX,
+    ir.IR_LOAD_GLOBAL,
+    ir.IR_LOAD_LOCAL,
+    ir.IR_LOAD_CONST,
+    ir.IR_NEW_OBJECT,
+    ir.IR_NEW_ARRAY,
+    ir.IR_CALL_BUILTIN,
+    ir.IR_TYPEOF,
   ]);
 
   const nodeRep = new Map();
@@ -209,11 +143,11 @@ export function representationSelection(graph) {
         nodeRep.set(node.id, REP_BOOL);
       } else if (FLOAT64_PRODUCERS.has(node.type)) {
         nodeRep.set(node.id, REP_FLOAT64);
-      } else if (node.type === IR_CONSTANT) {
+      } else if (node.type === ir.IR_CONSTANT) {
         nodeRep.set(node.id, constantRep(node.props.value));
-      } else if (node.type === IR_CHECK_SMI) {
+      } else if (node.type === ir.IR_CHECK_SMI) {
         nodeRep.set(node.id, REP_INT32);
-      } else if (node.type === IR_CHECK_NUMBER) {
+      } else if (node.type === ir.IR_CHECK_NUMBER) {
         let needsFloat = false;
         for (const use of node.uses) {
           if (FLOAT64_CONSUMERS.has(use.type)) {
@@ -222,14 +156,14 @@ export function representationSelection(graph) {
           }
         }
         nodeRep.set(node.id, needsFloat ? REP_FLOAT64 : REP_INT32);
-      } else if (node.type === IR_PHI) {
+      } else if (node.type === ir.IR_PHI) {
         nodeRep.set(node.id, mergePhiRep(node.inputs));
-      } else if (node.type === IR_BOX) {
+      } else if (node.type === ir.IR_BOX) {
         nodeRep.set(
           node.id,
           node.props.fromType === "handle" ? REP_HANDLE : REP_TAGGED_NUMBER,
         );
-      } else if (node.type === IR_UNBOX) {
+      } else if (node.type === ir.IR_UNBOX) {
         nodeRep.set(
           node.id,
           node.props.toType === "float64"
@@ -238,27 +172,27 @@ export function representationSelection(graph) {
               ? REP_BOOL
               : REP_INT32,
         );
-      } else if (node.type === IR_LOAD_ELEMENT) {
+      } else if (node.type === ir.IR_LOAD_ELEMENT) {
         if (node.props.elementRep === "int32") nodeRep.set(node.id, REP_INT32);
         else if (node.props.elementRep === "float64")
           nodeRep.set(node.id, REP_FLOAT64);
         else nodeRep.set(node.id, REP_HANDLE);
       } else if (
-        node.type === IR_LOAD_FIELD ||
-        node.type === IR_POLYMORPHIC_LOAD
+        node.type === ir.IR_LOAD_FIELD ||
+        node.type === ir.IR_POLYMORPHIC_LOAD
       ) {
         let fieldRep = REP_TAGGED_NUMBER;
         if (node.uses && node.uses.length > 0) {
           let allNumeric = true;
           for (const use of node.uses) {
             if (
-              use.type !== IR_CHECK_SMI &&
-              use.type !== IR_CHECK_NUMBER &&
-              use.type !== IR_GENERIC_SUB &&
-              use.type !== IR_GENERIC_MUL &&
-              use.type !== IR_GENERIC_DIV &&
-              use.type !== IR_GENERIC_MOD &&
-              use.type !== IR_GENERIC_COMPARE
+              use.type !== ir.IR_CHECK_SMI &&
+              use.type !== ir.IR_CHECK_NUMBER &&
+              use.type !== ir.IR_GENERIC_SUB &&
+              use.type !== ir.IR_GENERIC_MUL &&
+              use.type !== ir.IR_GENERIC_DIV &&
+              use.type !== ir.IR_GENERIC_MOD &&
+              use.type !== ir.IR_GENERIC_COMPARE
             ) {
               allNumeric = false;
               break;
@@ -268,14 +202,14 @@ export function representationSelection(graph) {
         }
         nodeRep.set(node.id, fieldRep);
       } else if (
-        node.type === IR_CHECK_MAP ||
-        node.type === IR_CHECK_ARRAY ||
-        node.type === IR_CHECK_ELEMENTS_KIND ||
-        node.type === IR_CHECK_BOUNDS
+        node.type === ir.IR_CHECK_MAP ||
+        node.type === ir.IR_CHECK_ARRAY ||
+        node.type === ir.IR_CHECK_ELEMENTS_KIND ||
+        node.type === ir.IR_CHECK_BOUNDS
       ) {
         const inputRep = nodeRep.get(node.inputs[0]?.id);
         nodeRep.set(node.id, inputRep || REP_HANDLE);
-      } else if (node.type === IR_NEG) {
+      } else if (node.type === ir.IR_NEG) {
         const inputRep = nodeRep.get(node.inputs[0]?.id);
         nodeRep.set(
           node.id,
@@ -283,14 +217,14 @@ export function representationSelection(graph) {
         );
       } else if (TAGGED_NUMBER_PRODUCERS.has(node.type)) {
         nodeRep.set(node.id, REP_TAGGED_NUMBER);
-      } else if (node.type === IR_GENERIC_CALL) {
+      } else if (node.type === ir.IR_GENERIC_CALL) {
         let callRep = REP_HANDLE;
         if (node.uses && node.uses.length > 0) {
           let allSmi = true;
           let allNum = true;
           for (const use of node.uses) {
-            if (use.type !== IR_CHECK_SMI) allSmi = false;
-            if (use.type !== IR_CHECK_SMI && use.type !== IR_CHECK_NUMBER)
+            if (use.type !== ir.IR_CHECK_SMI) allSmi = false;
+            if (use.type !== ir.IR_CHECK_SMI && use.type !== ir.IR_CHECK_NUMBER)
               allNum = false;
           }
           if (allSmi) callRep = REP_INT32;
@@ -303,8 +237,8 @@ export function representationSelection(graph) {
           let allSmi = true;
           let allNum = true;
           for (const use of node.uses) {
-            if (use.type !== IR_CHECK_SMI) allSmi = false;
-            if (use.type !== IR_CHECK_SMI && use.type !== IR_CHECK_NUMBER)
+            if (use.type !== ir.IR_CHECK_SMI) allSmi = false;
+            if (use.type !== ir.IR_CHECK_SMI && use.type !== ir.IR_CHECK_NUMBER)
               allNum = false;
           }
           if (allSmi) hRep = REP_INT32;
@@ -321,16 +255,16 @@ export function representationSelection(graph) {
     let rep = nodeRep.get(param.id) || REP_HANDLE;
     for (const use of param.uses) {
       if (
-        use.type === IR_CHECK_MAP ||
-        use.type === IR_CHECK_ARRAY ||
-        use.type === IR_CHECK_ELEMENTS_KIND
+        use.type === ir.IR_CHECK_MAP ||
+        use.type === ir.IR_CHECK_ARRAY ||
+        use.type === ir.IR_CHECK_ELEMENTS_KIND
       ) {
         rep = REP_HANDLE;
         break;
       }
-      if (use.type === IR_CHECK_NUMBER || FLOAT64_CONSUMERS.has(use.type))
+      if (use.type === ir.IR_CHECK_NUMBER || FLOAT64_CONSUMERS.has(use.type))
         rep = REP_FLOAT64;
-      else if (use.type === IR_CHECK_SMI || INT32_CONSUMERS.has(use.type))
+      else if (use.type === ir.IR_CHECK_SMI || INT32_CONSUMERS.has(use.type))
         rep = rep === REP_FLOAT64 ? REP_FLOAT64 : REP_INT32;
     }
     nodeRep.set(param.id, rep);
@@ -341,65 +275,65 @@ export function representationSelection(graph) {
   const getExpectedInputRep = (consumer, inputIndex) => {
     if (INT32_CONSUMERS.has(consumer.type)) return REP_INT32;
     if (FLOAT64_CONSUMERS.has(consumer.type)) return REP_FLOAT64;
-    if (consumer.type === IR_RETURN)
+    if (consumer.type === ir.IR_RETURN)
       return nodeRep.get(consumer.inputs[inputIndex]?.id) || REP_HANDLE;
-    if (consumer.type === IR_BRANCH) return REP_BOOL;
+    if (consumer.type === ir.IR_BRANCH) return REP_BOOL;
     if (
-      consumer.type === IR_STORE_FIELD ||
-      consumer.type === IR_STORE_ELEMENT
+      consumer.type === ir.IR_STORE_FIELD ||
+      consumer.type === ir.IR_STORE_ELEMENT
     ) {
-      if (consumer.type === IR_STORE_FIELD && inputIndex === 1)
+      if (consumer.type === ir.IR_STORE_FIELD && inputIndex === 1)
         return (
           nodeRep.get(consumer.inputs[inputIndex]?.id) || REP_TAGGED_NUMBER
         );
-      if (consumer.type === IR_STORE_ELEMENT && inputIndex === 1)
+      if (consumer.type === ir.IR_STORE_ELEMENT && inputIndex === 1)
         return REP_INT32;
-      if (consumer.type === IR_STORE_ELEMENT && inputIndex === 2) {
+      if (consumer.type === ir.IR_STORE_ELEMENT && inputIndex === 2) {
         if (consumer.props.elementRep === "int32") return REP_INT32;
         if (consumer.props.elementRep === "float64") return REP_FLOAT64;
         return REP_HANDLE;
       }
     }
-    if (consumer.type === IR_LOAD_ELEMENT && inputIndex === 1) return REP_INT32;
-    if (consumer.type === IR_CHECK_BOUNDS && inputIndex === 0) return REP_INT32;
-    if (consumer.type === IR_TYPEOF) return REP_HANDLE;
-    if (consumer.type === IR_CHECK_CALL_TARGET) return REP_HANDLE;
-    if (consumer.type === IR_NOT)
+    if (consumer.type === ir.IR_LOAD_ELEMENT && inputIndex === 1) return REP_INT32;
+    if (consumer.type === ir.IR_CHECK_BOUNDS && inputIndex === 0) return REP_INT32;
+    if (consumer.type === ir.IR_TYPEOF) return REP_HANDLE;
+    if (consumer.type === ir.IR_CHECK_CALL_TARGET) return REP_HANDLE;
+    if (consumer.type === ir.IR_NOT)
       return nodeRep.get(consumer.inputs[inputIndex]?.id) || REP_HANDLE;
-    if (consumer.type === IR_NEG)
+    if (consumer.type === ir.IR_NEG)
       return nodeRep.get(consumer.inputs[inputIndex]?.id) === REP_FLOAT64
         ? REP_FLOAT64
         : REP_INT32;
-    if (consumer.type === IR_GENERIC_COMPARE) return REP_HANDLE;
+    if (consumer.type === ir.IR_GENERIC_COMPARE) return REP_HANDLE;
     if (
-      consumer.type === IR_GENERIC_SUB ||
-      consumer.type === IR_GENERIC_MUL ||
-      consumer.type === IR_GENERIC_DIV ||
-      consumer.type === IR_GENERIC_MOD ||
-      consumer.type === IR_GENERIC_BITAND ||
-      consumer.type === IR_GENERIC_BITOR ||
-      consumer.type === IR_GENERIC_BITXOR ||
-      consumer.type === IR_GENERIC_SHL ||
-      consumer.type === IR_GENERIC_SHR ||
-      consumer.type === IR_GENERIC_USHR ||
-      consumer.type === IR_GENERIC_POW ||
-      consumer.type === IR_GENERIC_BITNOT
+      consumer.type === ir.IR_GENERIC_SUB ||
+      consumer.type === ir.IR_GENERIC_MUL ||
+      consumer.type === ir.IR_GENERIC_DIV ||
+      consumer.type === ir.IR_GENERIC_MOD ||
+      consumer.type === ir.IR_GENERIC_BITAND ||
+      consumer.type === ir.IR_GENERIC_BITOR ||
+      consumer.type === ir.IR_GENERIC_BITXOR ||
+      consumer.type === ir.IR_GENERIC_SHL ||
+      consumer.type === ir.IR_GENERIC_SHR ||
+      consumer.type === ir.IR_GENERIC_USHR ||
+      consumer.type === ir.IR_GENERIC_POW ||
+      consumer.type === ir.IR_GENERIC_BITNOT
     ) {
       return REP_TAGGED_NUMBER;
     }
     if (
-      consumer.type === IR_GENERIC_ADD ||
-      consumer.type === IR_GENERIC_CALL ||
-      consumer.type === IR_GENERIC_GET_PROP ||
-      consumer.type === IR_GENERIC_SET_PROP ||
-      consumer.type === IR_GENERIC_GET_INDEX ||
-      consumer.type === IR_GENERIC_SET_INDEX ||
-      consumer.type === IR_NEW_ARRAY ||
-      consumer.type === IR_STORE_GLOBAL
+      consumer.type === ir.IR_GENERIC_ADD ||
+      consumer.type === ir.IR_GENERIC_CALL ||
+      consumer.type === ir.IR_GENERIC_GET_PROP ||
+      consumer.type === ir.IR_GENERIC_SET_PROP ||
+      consumer.type === ir.IR_GENERIC_GET_INDEX ||
+      consumer.type === ir.IR_GENERIC_SET_INDEX ||
+      consumer.type === ir.IR_NEW_ARRAY ||
+      consumer.type === ir.IR_STORE_GLOBAL
     ) {
       return nodeRep.get(consumer.inputs[inputIndex]?.id) || REP_HANDLE;
     }
-    if (consumer.type === IR_PHI) {
+    if (consumer.type === ir.IR_PHI) {
       return nodeRep.get(consumer.id) || REP_HANDLE;
     }
     return null;
@@ -418,7 +352,7 @@ export function representationSelection(graph) {
           continue;
 
         if (producerRep === REP_INT32 && expectedRep === REP_TAGGED_NUMBER) {
-          const boxNode = irBox(input, "int32");
+          const boxNode = ir.irBox(input, "int32");
           boxNode.frameState = node.frameState;
           nodeRep.set(boxNode.id, REP_TAGGED_NUMBER);
           node.replaceInput(i, boxNode);
@@ -428,7 +362,7 @@ export function representationSelection(graph) {
           producerRep === REP_FLOAT64 &&
           expectedRep === REP_TAGGED_NUMBER
         ) {
-          const boxNode = irBox(input, "float64");
+          const boxNode = ir.irBox(input, "float64");
           boxNode.frameState = node.frameState;
           nodeRep.set(boxNode.id, REP_TAGGED_NUMBER);
           node.replaceInput(i, boxNode);
@@ -442,7 +376,7 @@ export function representationSelection(graph) {
           (producerRep === REP_TAGGED_NUMBER || producerRep === REP_HANDLE) &&
           expectedRep === REP_BOOL
         ) {
-          const unboxNode = irUnbox(input, "bool");
+          const unboxNode = ir.irUnbox(input, "bool");
           unboxNode.frameState = node.frameState;
           nodeRep.set(unboxNode.id, REP_BOOL);
           node.replaceInput(i, unboxNode);
@@ -452,7 +386,7 @@ export function representationSelection(graph) {
           (producerRep === REP_TAGGED_NUMBER || producerRep === REP_HANDLE) &&
           expectedRep === REP_INT32
         ) {
-          const unboxNode = irUnbox(input, "int32");
+          const unboxNode = ir.irUnbox(input, "int32");
           unboxNode.frameState = node.frameState;
           nodeRep.set(unboxNode.id, REP_INT32);
           node.replaceInput(i, unboxNode);
@@ -462,7 +396,7 @@ export function representationSelection(graph) {
           (producerRep === REP_TAGGED_NUMBER || producerRep === REP_HANDLE) &&
           expectedRep === REP_FLOAT64
         ) {
-          const unboxNode = irUnbox(input, "float64");
+          const unboxNode = ir.irUnbox(input, "float64");
           unboxNode.frameState = node.frameState;
           nodeRep.set(unboxNode.id, REP_FLOAT64);
           node.replaceInput(i, unboxNode);

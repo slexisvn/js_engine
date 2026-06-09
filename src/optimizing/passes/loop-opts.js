@@ -1,18 +1,4 @@
-import {
-  IRNode,
-  IR_PARAMETER,
-  IR_CONSTANT,
-  IR_CHECK_MAP,
-  IR_CHECK_SMI,
-  IR_CHECK_NUMBER,
-  IR_CHECK_ARRAY,
-  IR_LOAD_FIELD,
-  IR_STORE_FIELD,
-  IR_BRANCH,
-  IR_PHI,
-  IR_INT32_ADD,
-  IR_INT32_COMPARE,
-} from "../ir/index.js";
+import * as ir from "../ir/index.js";
 
 import { tracer } from "../../core/tracing/index.js";
 import { computeDominators, dominates } from "./dominators.js";
@@ -37,7 +23,7 @@ export function hoistLoopInvariants(graph, findLoopsFn) {
     const storeTargets = new Map();
     for (const b of bodyBlocks) {
       for (const n of b.nodes) {
-        if (n.type === IR_STORE_FIELD && n.inputs[0]) {
+        if (n.type === ir.IR_STORE_FIELD && n.inputs[0]) {
           const objId = n.inputs[0].id;
           const offset = n.props && n.props.offset;
           if (!storeTargets.has(objId)) storeTargets.set(objId, new Set());
@@ -47,11 +33,11 @@ export function hoistLoopInvariants(graph, findLoopsFn) {
     }
 
     const HOISTABLE = new Set([
-      IR_CHECK_MAP,
-      IR_CHECK_SMI,
-      IR_CHECK_NUMBER,
-      IR_LOAD_FIELD,
-      IR_CONSTANT,
+      ir.IR_CHECK_MAP,
+      ir.IR_CHECK_SMI,
+      ir.IR_CHECK_NUMBER,
+      ir.IR_LOAD_FIELD,
+      ir.IR_CONSTANT,
     ]);
 
     const loadAliasesStore = (loadNode) => {
@@ -70,7 +56,7 @@ export function hoistLoopInvariants(graph, findLoopsFn) {
     };
 
     const isDefinedOutsideLoop = (node) => {
-      if (node.type === IR_PARAMETER || node.type === IR_CONSTANT) return true;
+      if (node.type === ir.IR_PARAMETER || node.type === ir.IR_CONSTANT) return true;
       const block = nodeToBlock.get(node.id);
       if (!block) return true;
       return !bodyBlockIds.has(block.id);
@@ -84,7 +70,7 @@ export function hoistLoopInvariants(graph, findLoopsFn) {
       for (const node of block.nodes) {
         if (!HOISTABLE.has(node.type)) continue;
         if (node.frameState) continue;
-        if (node.type === IR_LOAD_FIELD && loadAliasesStore(node)) continue;
+        if (node.type === ir.IR_LOAD_FIELD && loadAliasesStore(node)) continue;
         candidates.push({ node, block });
       }
     }
@@ -105,7 +91,7 @@ export function hoistLoopInvariants(graph, findLoopsFn) {
           if (!alreadyInvariant.has(use.id) && bodyBlockIds.has(nodeToBlock.get(use.id)?.id)) {
             const useBlock = nodeToBlock.get(use.id);
             if (useBlock && HOISTABLE.has(use.type) && !use.frameState) {
-              if (use.type !== IR_LOAD_FIELD || !loadAliasesStore(use)) {
+              if (use.type !== ir.IR_LOAD_FIELD || !loadAliasesStore(use)) {
                 worklist.push({ node: use, block: useBlock });
               }
             }
@@ -234,7 +220,7 @@ export function loopUnrolling(graph, findLoopsFn) {
     if (totalNodes > MAX_PEEL_NODES) continue;
 
     const headerTerm = header.getTerminator();
-    if (!headerTerm || headerTerm.type !== IR_BRANCH) continue;
+    if (!headerTerm || headerTerm.type !== ir.IR_BRANCH) continue;
 
     const trueBlock = blockById.get(headerTerm.props.trueBlock);
     const falseBlock = blockById.get(headerTerm.props.falseBlock);
@@ -267,7 +253,7 @@ export function loopUnrolling(graph, findLoopsFn) {
 
     for (const block of bodyBlocks) {
       for (const node of block.nodes) {
-        if (node.type === IR_LOAD_FIELD && node.inputs.every(canUseInPreHeader)) {
+        if (node.type === ir.IR_LOAD_FIELD && node.inputs.every(canUseInPreHeader)) {
           peelableLoads.set(node.id, node);
         }
       }
@@ -304,7 +290,7 @@ export function loopUnrolling(graph, findLoopsFn) {
 
     const cloneMap = new Map();
     for (const { original, isLoad } of peeledNodes) {
-      const peeled = new IRNode(original.type, { ...original.props });
+      const peeled = new ir.IRNode(original.type, { ...original.props });
       for (const inp of original.inputs) {
         peeled.addInput(cloneMap.get(inp.id) || inp);
       }
@@ -336,16 +322,16 @@ function buildNodeToBlock(graph) {
 
 function isPeelableCheck(node) {
   return (
-    node.type === IR_CHECK_SMI ||
-    node.type === IR_CHECK_MAP ||
-    node.type === IR_CHECK_NUMBER ||
-    node.type === IR_CHECK_ARRAY
+    node.type === ir.IR_CHECK_SMI ||
+    node.type === ir.IR_CHECK_MAP ||
+    node.type === ir.IR_CHECK_NUMBER ||
+    node.type === ir.IR_CHECK_ARRAY
   );
 }
 
 function valueAvailableAtBlock(value, block, nodeToBlock, dominators) {
   if (!value) return true;
-  if (value.type === IR_PARAMETER || value.type === IR_CONSTANT) return true;
+  if (value.type === ir.IR_PARAMETER || value.type === ir.IR_CONSTANT) return true;
   const owner = nodeToBlock.get(value.id);
   if (!owner) return false;
   return dominates(dominators, owner, block);

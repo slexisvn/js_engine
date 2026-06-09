@@ -1,36 +1,17 @@
-import {
-  IR_INT32_ADD,
-  IR_INT32_SUB,
-  IR_INT32_MUL,
-  IR_INT32_DIV,
-  IR_INT32_MOD,
-  IR_INT32_SHL,
-  IR_INT32_SHR,
-  IR_INT32_AND,
-  IR_INT32_OR,
-  IR_INT32_XOR,
-  IR_FLOAT64_ADD,
-  IR_FLOAT64_SUB,
-  IR_FLOAT64_MUL,
-  IR_FLOAT64_DIV,
-  EFFECT_NONE,
-  IR_PARAMETER,
-  IR_CONSTANT,
-  IR_PHI,
-} from "../ir/index.js";
+import * as ir from "../ir/index.js";
 import { computeDominators, buildDominatorTree } from "./dominators.js";
 import { replaceGraphFrameStateValue } from "./frame-state-values.js";
 
-const KEEP_ALIVE = new Set([IR_PARAMETER, IR_CONSTANT, IR_PHI]);
+const KEEP_ALIVE = new Set([ir.IR_PARAMETER, ir.IR_CONSTANT, ir.IR_PHI]);
 
 const COMMUTATIVE_OPS = new Set([
-  IR_INT32_ADD,
-  IR_INT32_MUL,
-  IR_INT32_AND,
-  IR_INT32_OR,
-  IR_INT32_XOR,
-  IR_FLOAT64_ADD,
-  IR_FLOAT64_MUL,
+  ir.IR_INT32_ADD,
+  ir.IR_INT32_MUL,
+  ir.IR_INT32_AND,
+  ir.IR_INT32_OR,
+  ir.IR_INT32_XOR,
+  ir.IR_FLOAT64_ADD,
+  ir.IR_FLOAT64_MUL,
 ]);
 
 function hashNode(node) {
@@ -85,7 +66,7 @@ export function globalValueNumbering(graph) {
   const visit = (block, inheritedTable) => {
     const valueTable = new Map(inheritedTable);
     for (const node of block.nodes) {
-      if (node.effectKind !== EFFECT_NONE) continue;
+      if (node.effectKind !== ir.EFFECT_NONE) continue;
       if (KEEP_ALIVE.has(node.type)) continue;
       if (node.inputs.length === 0) continue;
 
@@ -113,7 +94,7 @@ export function globalValueNumbering(graph) {
         (n) =>
           n.inputs.length > 0 ||
           n.uses.length > 0 ||
-          n.effectKind !== EFFECT_NONE ||
+          n.effectKind !== ir.EFFECT_NONE ||
           KEEP_ALIVE.has(n.type),
       );
     }

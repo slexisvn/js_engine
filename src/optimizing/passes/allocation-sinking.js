@@ -1,13 +1,4 @@
-import {
-  IR_NEW_OBJECT,
-  IR_GENERIC_SET_PROP,
-  IR_GENERIC_GET_PROP,
-  IR_CHECK_MAP,
-  IR_STORE_FIELD,
-  IR_LOAD_FIELD,
-  IR_DEOPTIMIZE,
-  IR_RETURN,
-} from "../ir/index.js";
+import * as ir from "../ir/index.js";
 import { tracer } from "../../core/tracing/index.js";
 import { replaceGraphFrameStateValue } from "./frame-state-values.js";
 
@@ -17,7 +8,7 @@ export function allocationSinking(graph) {
   for (const block of graph.blocks) {
     const allocations = [];
     for (const node of block.nodes) {
-      if (node.type === IR_NEW_OBJECT) {
+      if (node.type === ir.IR_NEW_OBJECT) {
         allocations.push(node);
       }
     }
@@ -28,7 +19,7 @@ export function allocationSinking(graph) {
       if (analysis.fullyEscapes || analysis.escapePoints.length === 0) continue;
 
       const onlyEscapesOnDeopt = analysis.escapePoints.every(
-        (ep) => ep.type === IR_DEOPTIMIZE,
+        (ep) => ep.type === ir.IR_DEOPTIMIZE,
       );
 
       if (onlyEscapesOnDeopt) {
@@ -53,19 +44,19 @@ function analyzeEscape(alloc, defBlock, graph) {
   const propStores = new Map();
 
   for (const use of alloc.uses) {
-    if (use.type === IR_GENERIC_SET_PROP && use.inputs[0] === alloc) {
+    if (use.type === ir.IR_GENERIC_SET_PROP && use.inputs[0] === alloc) {
       safeUses.add(use);
       propStores.set(use.props.propName, use);
-    } else if (use.type === IR_GENERIC_GET_PROP && use.inputs[0] === alloc) {
+    } else if (use.type === ir.IR_GENERIC_GET_PROP && use.inputs[0] === alloc) {
       safeUses.add(use);
-    } else if (use.type === IR_CHECK_MAP && use.inputs[0] === alloc) {
+    } else if (use.type === ir.IR_CHECK_MAP && use.inputs[0] === alloc) {
       safeUses.add(use);
       for (const checkUse of use.uses) {
-        if (checkUse.type === IR_STORE_FIELD && checkUse.inputs[0] === use) {
+        if (checkUse.type === ir.IR_STORE_FIELD && checkUse.inputs[0] === use) {
           safeUses.add(checkUse);
           fieldStores.set(checkUse.props.offset, checkUse);
         } else if (
-          checkUse.type === IR_LOAD_FIELD &&
+          checkUse.type === ir.IR_LOAD_FIELD &&
           checkUse.inputs[0] === use
         ) {
           safeUses.add(checkUse);
@@ -73,9 +64,9 @@ function analyzeEscape(alloc, defBlock, graph) {
           escapePoints.push(checkUse);
         }
       }
-    } else if (use.type === IR_DEOPTIMIZE) {
+    } else if (use.type === ir.IR_DEOPTIMIZE) {
       escapePoints.push(use);
-    } else if (use.type === IR_RETURN) {
+    } else if (use.type === ir.IR_RETURN) {
       escapePoints.push(use);
     } else {
       fullyEscapes = true;
@@ -105,7 +96,7 @@ function sinkToDeoptOnly(alloc, block, analysis, graph) {
   const virtualState = buildVirtualState(alloc, block, analysis);
 
   for (const deoptNode of analysis.escapePoints) {
-    if (deoptNode.type !== IR_DEOPTIMIZE) continue;
+    if (deoptNode.type !== ir.IR_DEOPTIMIZE) continue;
     if (!deoptNode.props) deoptNode.props = {};
     if (!deoptNode.props.sunkAllocations)
       deoptNode.props.sunkAllocations = new Map();
@@ -145,7 +136,7 @@ function removeAllocation(alloc, analysis, graph) {
   });
 
   for (const use of analysis.safeUses) {
-    if (use.type === IR_GENERIC_GET_PROP || use.type === IR_LOAD_FIELD) {
+    if (use.type === ir.IR_GENERIC_GET_PROP || use.type === ir.IR_LOAD_FIELD) {
       const replacement = findStoredValue(use, analysis);
       if (replacement) {
         for (const user of use.uses) {
@@ -180,12 +171,12 @@ function removeAllocation(alloc, analysis, graph) {
 }
 
 function findStoredValue(loadNode, analysis) {
-  if (loadNode.type === IR_LOAD_FIELD) {
+  if (loadNode.type === ir.IR_LOAD_FIELD) {
     const offset = loadNode.props.offset;
     const storeNode = analysis.fieldStores.get(offset);
     return storeNode ? storeNode.inputs[1] : null;
   }
-  if (loadNode.type === IR_GENERIC_GET_PROP) {
+  if (loadNode.type === ir.IR_GENERIC_GET_PROP) {
     const propName = loadNode.props.propName;
     const storeNode = analysis.propStores.get(propName);
     return storeNode ? storeNode.inputs[1] : null;
