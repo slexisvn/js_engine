@@ -145,6 +145,82 @@ describe("Deoptimizer.materializeValue", () => {
     const result = deopt.materializeValue(tagged, new Map());
     expect(result).toBe(tagged);
   });
+
+  it("materializes BlockParam by recursing inputs[0]", () => {
+    const inner = { id: 1, type: "Constant", props: { value: 50 } };
+    const blockParam = { id: 2, type: "BlockParam", inputs: [inner] };
+    const result = deopt.materializeValue(blockParam, new Map());
+    expect(getPayload(result)).toBe(50);
+  });
+
+  it("materializes TypeOf with number input to 'number'", () => {
+    const numNode = { id: 1, type: "Constant", props: { value: 42 } };
+    const typeofNode = { id: 2, type: "TypeOf", inputs: [numNode] };
+    const result = deopt.materializeValue(typeofNode, new Map());
+    expect(isString(result)).toBe(true);
+    expect(getPayload(result)).toBe("number");
+  });
+
+  it("materializes TypeOf with string input to 'string'", () => {
+    const strNode = { id: 1, type: "Constant", props: { value: "hi" } };
+    const typeofNode = { id: 2, type: "TypeOf", inputs: [strNode] };
+    const result = deopt.materializeValue(typeofNode, new Map());
+    expect(getPayload(result)).toBe("string");
+  });
+
+  it("materializes LoadLocal by recursing inputs[0]", () => {
+    const inner = { id: 1, type: "Constant", props: { value: 88 } };
+    const loadLocal = { id: 2, type: "LoadLocal", inputs: [inner] };
+    const result = deopt.materializeValue(loadLocal, new Map());
+    expect(getPayload(result)).toBe(88);
+  });
+
+  it("materializes StoreLocal by recursing inputs[1]", () => {
+    const slot = { id: 1, type: "Constant", props: { value: 0 } };
+    const val = { id: 3, type: "Constant", props: { value: 77 } };
+    const storeLocal = { id: 2, type: "StoreLocal", inputs: [slot, val] };
+    const result = deopt.materializeValue(storeLocal, new Map());
+    expect(getPayload(result)).toBe(77);
+  });
+
+  it("materializes CheckSmi pass-through", () => {
+    const inner = { id: 1, type: "Constant", props: { value: 5 } };
+    const check = { id: 2, type: "CheckSmi", inputs: [inner] };
+    const result = deopt.materializeValue(check, new Map());
+    expect(getPayload(result)).toBe(5);
+  });
+
+  it("materializes GenericAdd with two numbers", () => {
+    const left = { id: 1, type: "Constant", props: { value: 10 } };
+    const right = { id: 2, type: "Constant", props: { value: 20 } };
+    const add = { id: 3, type: "GenericAdd", inputs: [left, right] };
+    const result = deopt.materializeValue(add, new Map());
+    expect(getPayload(result)).toBe(30);
+  });
+
+  it("materializes GenericAdd with string concatenation", () => {
+    const left = { id: 1, type: "Constant", props: { value: "hello" } };
+    const right = { id: 2, type: "Constant", props: { value: " world" } };
+    const add = { id: 3, type: "GenericAdd", inputs: [left, right] };
+    const result = deopt.materializeValue(add, new Map());
+    expect(isString(result)).toBe(true);
+    expect(getPayload(result)).toBe("hello world");
+  });
+
+  it("materializes Neg", () => {
+    const inner = { id: 1, type: "Constant", props: { value: 7 } };
+    const neg = { id: 2, type: "Neg", inputs: [inner] };
+    const result = deopt.materializeValue(neg, new Map());
+    expect(getPayload(result)).toBe(-7);
+  });
+
+  it("materializes Not", () => {
+    const inner = { id: 1, type: "Constant", props: { value: true } };
+    const not = { id: 2, type: "Not", inputs: [inner] };
+    const result = deopt.materializeValue(not, new Map());
+    expect(isBool(result)).toBe(true);
+    expect(getPayload(result)).toBe(false);
+  });
 });
 
 describe("Deoptimizer.recordDeoptReason / getStats", () => {

@@ -1121,6 +1121,31 @@ function compileInstruction(
         );
       }
 
+      if (
+        callHint &&
+        callHint.targetRef === compiledFn &&
+        argCount === compiledFn.paramCount
+      ) {
+        const frameState = captureFrameState(
+          compiledFn,
+          bytecodeIdx,
+          regs,
+          [callee],
+          frameStates,
+        );
+        graph.addDependency(
+          DEP_CALL_TARGET,
+          compiledFn.id,
+          compiledFn.version,
+        );
+        if (callee) callee._deadForSelfRecursion = true;
+        const knownCall = ir.irCallKnownFunction(compiledFn, args);
+        knownCall.frameState = frameState;
+        block.addNode(knownCall);
+        block._lastAcc = knownCall;
+        break;
+      }
+
       const node = ir.irGenericCall(callee, args);
       node.frameState = captureFrameState(
         compiledFn,

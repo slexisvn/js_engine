@@ -201,6 +201,77 @@ describe("migration", () => {
   });
 });
 
+describe("lazy overflow and allocation optimizations", () => {
+  it("overflowProperties is null on fresh object", () => {
+    const obj = new JSObject();
+    expect(obj.overflowProperties).toBeNull();
+  });
+
+  it("overflowProperties stays null with fewer than 10 properties", () => {
+    const obj = new JSObject();
+    for (let i = 0; i < 5; i++) {
+      obj.setProperty(`p${i}`, mkSmi(i));
+    }
+    expect(obj.overflowProperties).toBeNull();
+  });
+
+  it("overflowProperties created lazily when exceeding 10 slots", () => {
+    const obj = new JSObject();
+    for (let i = 0; i < 12; i++) {
+      obj.setProperty(`p${i}`, mkSmi(i));
+    }
+    expect(obj.overflowProperties).not.toBeNull();
+    expect(obj.overflowProperties.size).toBe(2);
+  });
+
+  it("getProperty returns undefined for overflow range on fresh object", () => {
+    const obj = new JSObject();
+    obj.setProperty("x", mkSmi(1));
+    expect(obj.getProperty("missing")).toBeUndefined();
+  });
+
+  it("visitReferences works with null overflowProperties", () => {
+    const obj = new JSObject();
+    obj.setProperty("x", mkSmi(1));
+    const visited = [];
+    obj.visitReferences((ref) => visited.push(ref));
+    expect(visited).toEqual([]);
+  });
+
+  it("pre-allocates slots array from hidden class propertyCount", () => {
+    const obj1 = new JSObject();
+    obj1.setProperty("a", mkSmi(1));
+    obj1.setProperty("b", mkSmi(2));
+    const hc = obj1.hiddenClass;
+    const obj2 = new JSObject(hc);
+    expect(obj2.slots.length).toBe(hc.propertyCount);
+  });
+
+  it("skip invalidation for fresh single-object hidden class", () => {
+    const obj = new JSObject();
+    const rootHC = obj.hiddenClass;
+    const versionBefore = rootHC.version;
+    obj.setProperty("x", mkSmi(1));
+    expect(rootHC.version).toBe(versionBefore);
+  });
+
+  it("invalidates when hidden class has enough remaining objects", () => {
+    const obj1 = new JSObject();
+    obj1.setProperty("x", mkSmi(1));
+    const obj2 = new JSObject();
+    obj2.setProperty("x", mkSmi(2));
+    const obj3 = new JSObject();
+    obj3.setProperty("x", mkSmi(3));
+    const sharedHC = obj1.hiddenClass;
+    expect(sharedHC).toBe(obj2.hiddenClass);
+    expect(sharedHC).toBe(obj3.hiddenClass);
+    expect(sharedHC.objectCount).toBe(3);
+    const versionBefore = sharedHC.version;
+    obj1.setProperty("y", mkSmi(4));
+    expect(sharedHC.version).toBeGreaterThan(versionBefore);
+  });
+});
+
 describe("keys/values/entries", () => {
   it("keys returns only enumerable property names", () => {
     const obj = new JSObject();

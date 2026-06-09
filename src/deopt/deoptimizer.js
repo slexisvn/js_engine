@@ -25,12 +25,16 @@ import {
   isBool,
   isString,
   toNumber,
+  toBool,
   toDisplayString,
+  typeOf,
+  getPayload,
   TAG_SMI,
   TAG_DOUBLE,
 } from "../core/value/index.js";
 import { tracer } from "../core/tracing/index.js";
 import { dependencyRegistry } from "./dependencies.js";
+import * as ir from "../optimizing/ir/index.js";
 
 export { DeoptSignal };
 
@@ -289,7 +293,35 @@ export class Deoptimizer {
         return runtimeVal;
       }
 
-      if (irNodeOrValue.type === "Constant" && irNodeOrValue.props) {
+      switch (irNodeOrValue.type) {
+        case ir.IR_CHECK_SMI:
+        case ir.IR_CHECK_NUMBER:
+        case ir.IR_CHECK_MAP:
+        case ir.IR_CHECK_ARRAY:
+        case ir.IR_CHECK_ELEMENTS_KIND:
+        case ir.IR_CHECK_BOUNDS:
+        case ir.IR_CHECK_CALL_TARGET:
+        case ir.IR_BOX:
+        case ir.IR_UNBOX:
+        case ir.IR_BLOCK_PARAM:
+        case ir.IR_LOAD_LOCAL:
+          return this.materializeValue(irNodeOrValue.inputs[0], runtimeValues);
+      }
+
+      if (irNodeOrValue.type === ir.IR_TYPEOF) {
+        const input = this.materializeValue(irNodeOrValue.inputs[0], runtimeValues);
+        return mkString(typeOf(input));
+      }
+
+      if (irNodeOrValue.type === ir.IR_STORE_LOCAL) {
+        return this.materializeValue(irNodeOrValue.inputs[1], runtimeValues);
+      }
+
+      if (irNodeOrValue.type === ir.IR_PARAMETER) {
+        return mkUndefined();
+      }
+
+      if (irNodeOrValue.type === ir.IR_CONSTANT && irNodeOrValue.props) {
         const constValue = irNodeOrValue.props.value;
         if (typeof constValue === "number") {
           return mkNumber(constValue);
@@ -302,6 +334,54 @@ export class Deoptimizer {
         }
         if (constValue === null) return mkNull();
         if (constValue === undefined) return mkUndefined();
+      }
+
+      switch (irNodeOrValue.type) {
+        case ir.IR_INT32_ADD:
+        case ir.IR_FLOAT64_ADD:
+        case ir.IR_GENERIC_ADD: {
+          const left = this.materializeValue(irNodeOrValue.inputs[0], runtimeValues);
+          const right = this.materializeValue(irNodeOrValue.inputs[1], runtimeValues);
+          if (isString(left) || isString(right)) {
+            return mkString(toDisplayString(left) + toDisplayString(right));
+          }
+          return mkNumber(toNumber(left) + toNumber(right));
+        }
+        case ir.IR_INT32_SUB:
+        case ir.IR_FLOAT64_SUB:
+        case ir.IR_GENERIC_SUB: {
+          const left = this.materializeValue(irNodeOrValue.inputs[0], runtimeValues);
+          const right = this.materializeValue(irNodeOrValue.inputs[1], runtimeValues);
+          return mkNumber(toNumber(left) - toNumber(right));
+        }
+        case ir.IR_INT32_MUL:
+        case ir.IR_FLOAT64_MUL:
+        case ir.IR_GENERIC_MUL: {
+          const left = this.materializeValue(irNodeOrValue.inputs[0], runtimeValues);
+          const right = this.materializeValue(irNodeOrValue.inputs[1], runtimeValues);
+          return mkNumber(toNumber(left) * toNumber(right));
+        }
+        case ir.IR_INT32_DIV:
+        case ir.IR_FLOAT64_DIV:
+        case ir.IR_GENERIC_DIV: {
+          const left = this.materializeValue(irNodeOrValue.inputs[0], runtimeValues);
+          const right = this.materializeValue(irNodeOrValue.inputs[1], runtimeValues);
+          return mkNumber(toNumber(left) / toNumber(right));
+        }
+        case ir.IR_INT32_MOD:
+        case ir.IR_GENERIC_MOD: {
+          const left = this.materializeValue(irNodeOrValue.inputs[0], runtimeValues);
+          const right = this.materializeValue(irNodeOrValue.inputs[1], runtimeValues);
+          return mkNumber(toNumber(left) % toNumber(right));
+        }
+        case ir.IR_NEG: {
+          const input = this.materializeValue(irNodeOrValue.inputs[0], runtimeValues);
+          return mkNumber(-toNumber(input));
+        }
+        case ir.IR_NOT: {
+          const input = this.materializeValue(irNodeOrValue.inputs[0], runtimeValues);
+          return mkBool(!toBool(input));
+        }
       }
 
       return mkUndefined();

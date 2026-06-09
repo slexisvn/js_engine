@@ -69,7 +69,7 @@ export function runAsyncWithSuspension(interpreter, asyncFrame, capability) {
           suspendedFrame.acc = result;
           runAsyncWithSuspension(interpreter, suspendedFrame, capability);
         } else {
-          if (suspendedFrame.exceptionHandlers.length > 0) {
+          if (suspendedFrame.exceptionHandlers && suspendedFrame.exceptionHandlers.length > 0) {
             const handler = suspendedFrame.exceptionHandlers.pop();
             suspendedFrame.acc = result;
             suspendedFrame.pc = handler.catchPC;

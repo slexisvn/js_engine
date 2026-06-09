@@ -33,8 +33,9 @@ export class JSObject {
   constructor(hiddenClass) {
     this.hiddenClass = hiddenClass || ROOT_HIDDEN_CLASS;
     this.hiddenClass.incrementObjectCount();
-    this.slots = [];
-    this.overflowProperties = new Map();
+    const propCount = this.hiddenClass.propertyCount;
+    this.slots = propCount > 0 ? new Array(propCount) : [];
+    this.overflowProperties = null;
     this.prototype = null;
     this.constructorRef = null;
     this.symbolProperties = null;
@@ -69,10 +70,12 @@ export class JSObject {
         callback(payload);
       }
     }
-    for (const val of this.overflowProperties.values()) {
-      const payload = getPayload(val);
-      if (payload && typeof payload === "object" && payload.gcHeader) {
-        callback(payload);
+    if (this.overflowProperties) {
+      for (const val of this.overflowProperties.values()) {
+        const payload = getPayload(val);
+        if (payload && typeof payload === "object" && payload.gcHeader) {
+          callback(payload);
+        }
       }
     }
     if (this.prototype && this.prototype.gcHeader) {
@@ -105,7 +108,7 @@ export class JSObject {
             depth,
           };
         }
-        const overflow = current.overflowProperties.get(name);
+        const overflow = current.overflowProperties ? current.overflowProperties.get(name) : undefined;
         if (overflow !== undefined) {
           return {
             found: true,
@@ -156,10 +159,10 @@ export class JSObject {
     const oldHC = this.hiddenClass;
     const targetHC = oldHC.migrationTarget;
     const oldSlots = [...this.slots];
-    const oldOverflow = new Map(this.overflowProperties);
+    const oldOverflow = this.overflowProperties ? new Map(this.overflowProperties) : new Map();
 
     this.slots = [];
-    this.overflowProperties.clear();
+    this.overflowProperties = null;
 
     for (const [name, newDesc] of targetHC.properties) {
       const oldDesc = oldHC.lookupProperty(name);
@@ -182,6 +185,7 @@ export class JSObject {
         }
         this.slots[newDesc.offset] = value;
       } else {
+        if (!this.overflowProperties) this.overflowProperties = new Map();
         this.overflowProperties.set(name, value);
       }
     }
@@ -215,7 +219,7 @@ export class JSObject {
       if (desc.offset < MAX_IN_OBJECT_PROPERTIES) {
         return this.slots[desc.offset];
       }
-      const val = this.overflowProperties.get(name);
+      const val = this.overflowProperties ? this.overflowProperties.get(name) : undefined;
       return val !== undefined ? val : undefined;
     }
     return undefined;
@@ -231,6 +235,7 @@ export class JSObject {
       if (desc.offset < MAX_IN_OBJECT_PROPERTIES) {
         this.slots[desc.offset] = value;
       } else {
+        if (!this.overflowProperties) this.overflowProperties = new Map();
         this.overflowProperties.set(name, value);
       }
       storeBarrierForTaggedValue(this, value);
@@ -252,7 +257,7 @@ export class JSObject {
       oldHC.incrementObjectCount();
       return false;
     }
-    if (!hadTransition) {
+    if (!hadTransition && oldHC.objectCount > 1) {
       oldHC.invalidate(`add:${name}`);
     }
     this.hiddenClass = newHC;
@@ -265,6 +270,7 @@ export class JSObject {
       }
       this.slots[newDesc.offset] = value;
     } else {
+      if (!this.overflowProperties) this.overflowProperties = new Map();
       this.overflowProperties.set(name, value);
     }
     storeBarrierForTaggedValue(this, value);
@@ -290,10 +296,10 @@ export class JSObject {
     oldHC.invalidate(`delete:${name}`);
 
     const oldSlots = [...this.slots];
-    const oldProperties = new Map(this.overflowProperties);
+    const oldProperties = this.overflowProperties ? new Map(this.overflowProperties) : new Map();
 
     this.slots = [];
-    this.overflowProperties.clear();
+    this.overflowProperties = null;
 
     for (const [key, newDesc] of newHC.properties) {
       let oldValue = undefined;
@@ -315,6 +321,7 @@ export class JSObject {
         }
         this.slots[newDesc.offset] = oldValue;
       } else {
+        if (!this.overflowProperties) this.overflowProperties = new Map();
         this.overflowProperties.set(key, oldValue);
       }
     }
@@ -371,6 +378,7 @@ export class JSObject {
         }
         this.slots[newDesc.offset] = value;
       } else {
+        if (!this.overflowProperties) this.overflowProperties = new Map();
         this.overflowProperties.set(name, value);
       }
     }
@@ -386,7 +394,7 @@ export class JSObject {
     if (desc.offset < MAX_IN_OBJECT_PROPERTIES) {
       value = this.slots[desc.offset];
     } else {
-      value = this.overflowProperties.get(name);
+      value = this.overflowProperties ? this.overflowProperties.get(name) : undefined;
     }
 
     return {
@@ -406,9 +414,11 @@ export class JSObject {
     if (offset < MAX_IN_OBJECT_PROPERTIES) {
       return this.slots[offset];
     }
-    for (const [name, desc] of this.hiddenClass.properties) {
-      if (desc.offset === offset) {
-        return this.overflowProperties.get(name);
+    if (this.overflowProperties) {
+      for (const [name, desc] of this.hiddenClass.properties) {
+        if (desc.offset === offset) {
+          return this.overflowProperties.get(name);
+        }
       }
     }
     return undefined;
@@ -427,6 +437,7 @@ export class JSObject {
     }
     for (const [name, desc] of this.hiddenClass.properties) {
       if (desc.offset === offset) {
+        if (!this.overflowProperties) this.overflowProperties = new Map();
         this.overflowProperties.set(name, value);
         dependencyRegistry.invalidate(
           DEP_MAP,
@@ -495,7 +506,7 @@ export class JSObject {
       if (desc.offset < MAX_IN_OBJECT_PROPERTIES) {
         val = this.slots[desc.offset];
       } else {
-        val = this.overflowProperties.get(name);
+        val = this.overflowProperties ? this.overflowProperties.get(name) : undefined;
       }
       entries.push(`${name}: ${toDisplayString(val)}`);
     }

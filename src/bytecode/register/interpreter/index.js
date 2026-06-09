@@ -1404,6 +1404,7 @@ export class RegisterInterpreter {
             }
 
             case bytecode.ROP_TRY_START: {
+              if (!frame.exceptionHandlers) frame.exceptionHandlers = [];
               frame.exceptionHandlers.push({
                 catchPC: operands[0],
               });
@@ -1417,7 +1418,7 @@ export class RegisterInterpreter {
 
             case bytecode.ROP_THROW: {
               const errorValue = frame.acc;
-              if (frame.exceptionHandlers.length > 0) {
+              if (frame.exceptionHandlers && frame.exceptionHandlers.length > 0) {
                 const handler = frame.exceptionHandlers.pop();
                 frame.acc = errorValue;
                 frame.pc = handler.catchPC;
@@ -1668,7 +1669,7 @@ export class RegisterInterpreter {
             }
           }
         } catch (e) {
-          if (frame.exceptionHandlers.length > 0) {
+          if (frame.exceptionHandlers && frame.exceptionHandlers.length > 0) {
             if (e instanceof RegisterMiniJITException) {
               const handler = frame.exceptionHandlers.pop();
               frame.acc = e.value;

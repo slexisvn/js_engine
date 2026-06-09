@@ -160,10 +160,27 @@ describe("integrity transitions", () => {
 });
 
 describe("stability and deprecation", () => {
-  it("transition marks parent unstable", () => {
+  it("marks parent unstable after exceeding transition threshold", () => {
     expect(ROOT_HIDDEN_CLASS.isStable).toBe(true);
-    ROOT_HIDDEN_CLASS.transition("x");
+    for (let i = 0; i <= MAX_TRANSITIONS_BEFORE_UNSTABLE; i++) {
+      ROOT_HIDDEN_CLASS.transition(`stability_test_${i}`);
+    }
     expect(ROOT_HIDDEN_CLASS.isStable).toBe(false);
+  });
+
+  it("single transition does not mark parent unstable", () => {
+    const hc = new HiddenClass(null, null, null, 0);
+    expect(hc.isStable).toBe(true);
+    hc.transition("x");
+    expect(hc.isStable).toBe(true);
+  });
+
+  it("stays stable below transition threshold", () => {
+    const hc = new HiddenClass(null, null, null, 0);
+    for (let i = 0; i < MAX_TRANSITIONS_BEFORE_UNSTABLE; i++) {
+      hc.transition(`below_${i}`);
+    }
+    expect(hc.isStable).toBe(true);
   });
 
   it("excessive transitions trigger deprecation on the transitioning HC", () => {

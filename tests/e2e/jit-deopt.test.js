@@ -531,3 +531,109 @@ describe("E2E: getStats deopt tracking", () => {
     expect(fn.lastDeoptReason).toBe("map-check-failed");
   });
 });
+
+describe("E2E: JIT global variable correctness", () => {
+  it("global accumulator returns correct sum after JIT optimization", () => {
+    const engine = new MiniJIT({
+      tieringPolicy: { jitThreshold: 5, baselineThreshold: 2 },
+    });
+    const r = engine.run(`
+      var sum = 0;
+      function addToSum(i) { sum = sum + i; }
+      for (var i = 0; i < 100; i++) { addToSum(i); }
+      sum;
+    `);
+    expect(getPayload(r)).toBe(4950);
+  });
+
+  it("global variable read/write consistency across JIT boundary", () => {
+    const engine = new MiniJIT({
+      tieringPolicy: { jitThreshold: 5, baselineThreshold: 2 },
+    });
+    const r = engine.run(`
+      var counter = 0;
+      function inc() { counter = counter + 1; return counter; }
+      var last = 0;
+      for (var i = 0; i < 20; i++) { last = inc(); }
+      last;
+    `);
+    expect(getPayload(r)).toBe(20);
+  });
+
+  it("global accumulator with function returning value", () => {
+    const engine = new MiniJIT({
+      tieringPolicy: { jitThreshold: 5, baselineThreshold: 2 },
+    });
+    const r = engine.run(`
+      var sum = 0;
+      function a(i) { sum = sum + i; return i + 4; }
+      for (var i = 0; i < 2000; i++) { a(i); }
+      sum;
+    `);
+    expect(getPayload(r)).toBe(1999000);
+  });
+
+  it("multiple globals stay independent under JIT", () => {
+    const engine = new MiniJIT({
+      tieringPolicy: { jitThreshold: 5, baselineThreshold: 2 },
+    });
+    const r = engine.run(`
+      var x = 0;
+      var y = 1;
+      function step(i) { x = x + i; y = y * 2; }
+      for (var i = 1; i <= 10; i++) { step(i); }
+      x;
+    `);
+    expect(getPayload(r)).toBe(55);
+  });
+});
+
+describe("E2E: JIT self-recursive functions", () => {
+  it("recursive fib returns correct result under JIT", () => {
+    const engine = new MiniJIT({
+      tieringPolicy: { jitThreshold: 5, baselineThreshold: 2 },
+    });
+    const r = engine.run(`
+      function fib(n) { if (n <= 1) return n; return fib(n - 1) + fib(n - 2); }
+      fib(20);
+    `);
+    expect(getPayload(r)).toBe(6765);
+  });
+
+  it("self-recursive function does not deopt repeatedly", () => {
+    const engine = new MiniJIT({
+      tieringPolicy: { jitThreshold: 5, baselineThreshold: 2 },
+    });
+    engine.run(`
+      function fib(n) { if (n <= 1) return n; return fib(n - 1) + fib(n - 2); }
+      fib(20);
+    `);
+    const fn = engine.collectFunctions().find((f) => f.name === "fib");
+    expect(fn.deoptCount).toBe(0);
+    expect(fn.disableOptimization).toBeFalsy();
+  });
+
+  it("recursive sum accumulator under JIT", () => {
+    const engine = new MiniJIT({
+      tieringPolicy: { jitThreshold: 5, baselineThreshold: 2 },
+    });
+    const r = engine.run(`
+      function sumTo(n) { if (n <= 0) return 0; return n + sumTo(n - 1); }
+      sumTo(100);
+    `);
+    expect(getPayload(r)).toBe(5050);
+  });
+
+  it("mutual recursion works under JIT", () => {
+    const engine = new MiniJIT({
+      tieringPolicy: { jitThreshold: 5, baselineThreshold: 2 },
+    });
+    const r = engine.run(`
+      function isEven(n) { if (n === 0) return true; return isOdd(n - 1); }
+      function isOdd(n) { if (n === 0) return false; return isEven(n - 1); }
+      for (var i = 0; i < 20; i++) { isEven(i); }
+      isEven(10) ? 1 : 0;
+    `);
+    expect(getPayload(r)).toBe(1);
+  });
+});

@@ -1,4 +1,5 @@
 import * as bytecode from "../../bytecode/register/ops/bytecode.js";
+import { isInsideWasmExecution } from "../wasm/codegen.js";
 
 import {
   mkSmi,
@@ -696,6 +697,7 @@ export class BaselineRuntime {
     )
       return null;
     if (this.hasConstructorCalls(fn.compiled)) return null;
+    if (isInsideWasmExecution()) return null;
     return fn.compiled.optimizedCode(args, this.u, this.interp);
   }
 
@@ -728,7 +730,11 @@ export class BaselineRuntime {
     )
       return null;
     if (this.hasMethodCalls(fn.compiled)) return null;
-    if (fn.compiled.optimizedCode && !this.hasConstructorCalls(fn.compiled))
+    if (
+      fn.compiled.optimizedCode &&
+      !this.hasConstructorCalls(fn.compiled) &&
+      !isInsideWasmExecution()
+    )
       return null;
     fn.compiled.invocationCount = (fn.compiled.invocationCount || 0) + 1;
     if (

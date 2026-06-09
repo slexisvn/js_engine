@@ -96,6 +96,14 @@ import {
   findLoopHeaders,
   findLoopBlocks,
   buildRegions,
+  CONDITIONALLY_NATIVE,
+  GENERIC_BITWISE_OPCODES,
+  isNativeEligible,
+  mathIntrinsicForNode,
+  MATH_INTRINSICS,
+  SPECULATIVE_ARITH_I32,
+  SPECULATIVE_ARITH_F64,
+  SPECULATIVE_COMPARE,
 } from "./graph-support.js";
 import {
   deoptReasonId,
@@ -117,6 +125,10 @@ const threadLocal = {
 
 const MAX_WASM_CALL_DEPTH = 1000;
 let wasmCallDepth = 0;
+
+export function isInsideWasmExecution() {
+  return wasmCallDepth > 0;
+}
 
 export class WasmCodegen {
   failAnalysis(node, reason) {
@@ -146,7 +158,7 @@ export class WasmCodegen {
     return this.lastCompileRejection === null;
   }
 
-  analyzeGraph(graph) {
+  analyzeGraph(graph, compiledFn) {
     const nodeWasmType = new Map();
     const nodeLocal = new Map();
     const localAlias = new Map();
@@ -160,6 +172,30 @@ export class WasmCodegen {
     const allocObjNodes = [];
     const entryGuards = [];
     const phiNodes = [];
+
+    const mathCallIntrinsics = new Map();
+    const mathCallDead = new Set();
+    for (const block of graph.blocks) {
+      for (const node of block.nodes) {
+        if (node.type !== ir.IR_GENERIC_CALL || !node.props.isMethod) continue;
+        const callee = node.inputs[0];
+        if (!callee || callee.type !== ir.IR_GENERIC_GET_PROP) continue;
+        const receiver = callee.inputs[0];
+        if (!receiver || receiver.type !== ir.IR_LOAD_GLOBAL) continue;
+        if (receiver.props.name !== "Math") continue;
+        const methodName = "Math." + callee.props.propName;
+        const intrinsic = MATH_INTRINSICS.get(methodName);
+        if (!intrinsic) continue;
+        const actualArgs = node.inputs.length - 2;
+        if (actualArgs !== intrinsic.arity) continue;
+        mathCallIntrinsics.set(node.id, {
+          intrinsic,
+          argInputs: node.inputs.slice(2),
+        });
+        mathCallDead.add(callee.id);
+        mathCallDead.add(receiver.id);
+      }
+    }
 
     for (const block of graph.blocks) {
       for (const node of block.nodes) {
@@ -187,6 +223,108 @@ export class WasmCodegen {
           nodeWasmType.set(node.id, wasmTypeForRep(repForNode(node)));
           continue;
         }
+        if (isNativeEligible(node)) {
+          const rep = repForNode(node);
+          if (node.type === ir.IR_TYPEOF) {
+            let typeStr;
+            if (rep === REP_INT32 || rep === REP_FLOAT64 || rep === REP_TAGGED_NUMBER) {
+              typeStr = "number";
+            } else if (rep === REP_BOOL) {
+              typeStr = "boolean";
+            }
+            if (typeStr) {
+              if (!this._typeofConstants) this._typeofConstants = new Map();
+              if (!this._typeofConstants.has(typeStr)) {
+                const syntheticId = -(this._typeofConstants.size + 1);
+                const syntheticNode = {
+                  id: syntheticId,
+                  type: ir.IR_CONSTANT,
+                  props: { value: typeStr },
+                };
+                this._typeofConstants.set(typeStr, syntheticNode);
+                nodeWasmType.set(syntheticId, wasmFormat.TYPE_I32);
+                if (!this._nonPrimitiveConstants) this._nonPrimitiveConstants = [];
+                this._nonPrimitiveConstants.push(syntheticNode);
+              }
+              const syntheticNode = this._typeofConstants.get(typeStr);
+              nodeWasmType.set(node.id, wasmFormat.TYPE_I32);
+              localAlias.set(node.id, syntheticNode.id);
+              needsMemory = true;
+              continue;
+            }
+          } else if (node.type === ir.IR_NEG && (rep === REP_FLOAT64 || rep === REP_TAGGED_NUMBER)) {
+            nodeWasmType.set(node.id, wasmFormat.TYPE_F64);
+          } else {
+            nodeWasmType.set(node.id, wasmFormat.TYPE_I32);
+          }
+          continue;
+        }
+        {
+          const intrinsic = mathIntrinsicForNode(node);
+          if (intrinsic) {
+            nodeWasmType.set(node.id, wasmFormat.TYPE_F64);
+            nodeValueRep.set(node.id, REP_FLOAT64);
+            continue;
+          }
+        }
+        if (node.type === ir.IR_LOAD_GLOBAL || node.type === ir.IR_STORE_GLOBAL) {
+          if (!this._globalCandidates) this._globalCandidates = new Map();
+          const name = node.props.name;
+          if (!this._globalCandidates.has(name)) {
+            this._globalCandidates.set(name, { loads: [], stores: [] });
+          }
+          const entry = this._globalCandidates.get(name);
+          if (node.type === ir.IR_LOAD_GLOBAL) entry.loads.push(node);
+          else entry.stores.push(node);
+        }
+        if (
+          node.type === ir.IR_FLOAT64_POW &&
+          node.inputs[1]?.type === ir.IR_CONSTANT &&
+          typeof node.inputs[1].props.value === "number"
+        ) {
+          const exp = node.inputs[1].props.value;
+          if (exp === 0 || exp === 1 || exp === 2 || exp === 0.5 || exp === -1) {
+            nodeWasmType.set(node.id, wasmFormat.TYPE_F64);
+            nodeValueRep.set(node.id, REP_FLOAT64);
+            continue;
+          }
+        }
+        if (
+          node.type === ir.IR_CALL_KNOWN_FUNCTION &&
+          compiledFn &&
+          node.props.target === compiledFn
+        ) {
+          if (!this._selfRecursiveCandidates) this._selfRecursiveCandidates = [];
+          this._selfRecursiveCandidates.push(node);
+          nodeWasmType.set(node.id, wasmTypeForRep(repForNode(node)));
+          continue;
+        }
+        if (node._deadForSelfRecursion) {
+          nodeWasmType.set(node.id, wasmTypeForRep(repForNode(node)));
+          continue;
+        }
+        if (mathCallDead.has(node.id)) {
+          nodeWasmType.set(node.id, wasmFormat.TYPE_I32);
+          continue;
+        }
+        if (mathCallIntrinsics.has(node.id)) {
+          nodeWasmType.set(node.id, wasmFormat.TYPE_F64);
+          nodeValueRep.set(node.id, REP_FLOAT64);
+          continue;
+        }
+        if (
+          (node.type === ir.IR_GENERIC_ADD ||
+            node.type === ir.IR_GENERIC_SUB ||
+            node.type === ir.IR_GENERIC_MUL) &&
+          node.inputs.length === 2 &&
+          node.inputs.every((inp) => {
+            const t = nodeWasmType.get(inp.id);
+            return t === wasmFormat.TYPE_I32 || t === wasmFormat.TYPE_F64;
+          })
+        ) {
+          nodeWasmType.set(node.id, wasmFormat.TYPE_F64);
+          continue;
+        }
         if (RUNTIME_STUB_NODES.has(node.type)) {
           runtimeStubTable.register(node);
           needsRuntimeStubImport = true;
@@ -198,9 +336,22 @@ export class WasmCodegen {
           case ir.IR_INT32_ADD:
           case ir.IR_INT32_SUB:
           case ir.IR_INT32_MUL:
+            if (!node.props?.noOverflow) {
+              nodeWasmType.set(node.id, wasmFormat.TYPE_F64);
+            } else {
+              nodeWasmType.set(node.id, wasmTypeForRep(repForNode(node)));
+            }
+            break;
           case ir.IR_INT32_DIV:
           case ir.IR_INT32_MOD:
           case ir.IR_INT32_COMPARE:
+          case ir.IR_INT32_SHL:
+          case ir.IR_INT32_SHR:
+          case ir.IR_INT32_USHR:
+          case ir.IR_INT32_AND:
+          case ir.IR_INT32_OR:
+          case ir.IR_INT32_XOR:
+          case ir.IR_INT32_NOT:
             nodeWasmType.set(node.id, wasmTypeForRep(repForNode(node)));
             break;
           case ir.IR_FLOAT64_ADD:
@@ -297,6 +448,53 @@ export class WasmCodegen {
       }
     }
 
+    if (this._globalCandidates) {
+      let hasCalls = false;
+      for (const block of graph.blocks) {
+        for (const node of block.nodes) {
+          if (
+            node.type === ir.IR_GENERIC_CALL ||
+            node.type === ir.IR_CALL_KNOWN_FUNCTION ||
+            node.type === ir.IR_CALL_BUILTIN
+          ) {
+            hasCalls = true;
+            break;
+          }
+        }
+        if (hasCalls) break;
+      }
+
+      for (const [name, entry] of this._globalCandidates) {
+        const hasNumericStore = entry.stores.some((s) => {
+          const inputRep = s.inputs[0] ? repForNode(s.inputs[0]) : REP_HANDLE;
+          return inputRep !== REP_HANDLE;
+        });
+        if (hasNumericStore && entry.stores.length > 0 && !hasCalls) {
+          if (!this._globalCellOffsets) this._globalCellOffsets = new Map();
+          this._globalCellOffsets.set(name, 32768 + this._globalCellOffsets.size * 8);
+          needsMemory = true;
+          for (const loadNode of entry.loads) {
+            nodeWasmType.set(loadNode.id, wasmFormat.TYPE_F64);
+            nodeValueRep.set(loadNode.id, REP_TAGGED_NUMBER);
+          }
+        } else {
+          for (const loadNode of entry.loads) {
+            if (loadNode._deadForSelfRecursion) continue;
+            runtimeStubTable.register(loadNode);
+            needsRuntimeStubImport = true;
+            needsMemory = true;
+            nodeWasmType.set(loadNode.id, wasmTypeForRep(repForNode(loadNode)));
+          }
+          for (const storeNode of entry.stores) {
+            if (storeNode._deadForSelfRecursion) continue;
+            runtimeStubTable.register(storeNode);
+            needsRuntimeStubImport = true;
+            needsMemory = true;
+          }
+        }
+      }
+    }
+
     if (INT32_OVERFLOW_CHECK.size > 0) {
       for (const block of graph.blocks) {
         for (const node of block.nodes) {
@@ -340,6 +538,9 @@ export class WasmCodegen {
         ) {
           type = type || wasmFormat.TYPE_F64;
           needsMemory = true;
+        } else if (mathCallIntrinsics.has(use.id)) {
+          type = type || wasmFormat.TYPE_F64;
+          nodeValueRep.set(param.id, REP_FLOAT64);
         } else if (RUNTIME_STUB_NODES.has(use.type)) {
           type = type || wasmTypeForRep(repForNode(param));
           needsMemory = true;
@@ -348,6 +549,9 @@ export class WasmCodegen {
       if (type === null) type = wasmTypeForRep(repForNode(param));
       nodeWasmType.set(param.id, type);
       nodeValueRep.set(param.id, valueRepForRep(repForNode(param)));
+      if (type === wasmFormat.TYPE_F64 && param.uses?.some((u) => mathCallIntrinsics.has(u.id))) {
+        nodeValueRep.set(param.id, REP_FLOAT64);
+      }
     }
 
     for (const block of graph.blocks) {
@@ -369,6 +573,25 @@ export class WasmCodegen {
           const inputType = nodeWasmType.get(node.inputs[0]?.id);
           nodeWasmType.set(node.id, inputType || wasmFormat.TYPE_I32);
           localAlias.set(node.id, node.inputs[0]?.id);
+        }
+      }
+    }
+
+    const orphanConstants = [];
+    for (const block of graph.blocks) {
+      for (const node of block.nodes) {
+        for (const inp of node.inputs) {
+          if (inp && !nodeWasmType.has(inp.id)) {
+            if (inp.type === ir.IR_CONSTANT) {
+              const v = inp.props?.value;
+              if (typeof v === "boolean" || typeof v === "number") {
+                nodeWasmType.set(inp.id, wasmTypeForRep(repForNode(inp)));
+              } else {
+                nodeWasmType.set(inp.id, wasmFormat.TYPE_I32);
+              }
+              orphanConstants.push(inp);
+            }
+          }
         }
       }
     }
@@ -404,6 +627,71 @@ export class WasmCodegen {
       }
     }
 
+    const speculativeNodes = new Set();
+    let speculativeChanged = true;
+    while (speculativeChanged) {
+      speculativeChanged = false;
+      for (const block of graph.blocks) {
+        for (const node of block.nodes) {
+          if (speculativeNodes.has(node.id)) continue;
+          if (!node.frameState) continue;
+          const hasF64 = SPECULATIVE_ARITH_F64[node.type] !== undefined;
+          const isCmp = SPECULATIVE_COMPARE.has(node.type);
+          if (!hasF64 && !isCmp) continue;
+          const lt = nodeWasmType.get(node.inputs[0]?.id);
+          const rt = nodeWasmType.get(node.inputs[1]?.id);
+          if (lt === undefined || rt === undefined) continue;
+          const bothNumeric =
+            (lt === wasmFormat.TYPE_I32 || lt === wasmFormat.TYPE_F64) &&
+            (rt === wasmFormat.TYPE_I32 || rt === wasmFormat.TYPE_F64);
+          if (!bothNumeric) continue;
+          if (hasF64) {
+            speculativeNodes.add(node.id);
+            node._speculativeType = SPECULATIVE_ARITH_F64[node.type];
+            nodeWasmType.set(node.id, wasmFormat.TYPE_F64);
+            runtimeStubTable.unregister(node.id);
+            speculativeChanged = true;
+          } else {
+            speculativeNodes.add(node.id);
+            const useF64 = lt === wasmFormat.TYPE_F64 || rt === wasmFormat.TYPE_F64;
+            node._speculativeType = useF64 ? ir.IR_FLOAT64_COMPARE : ir.IR_INT32_COMPARE;
+            nodeWasmType.set(node.id, wasmFormat.TYPE_I32);
+            runtimeStubTable.unregister(node.id);
+            speculativeChanged = true;
+          }
+        }
+      }
+      if (speculativeChanged) {
+        for (const phi of phiNodes) {
+          let resolvedType = null;
+          for (const inp of phi.inputs) {
+            const t = nodeWasmType.get(inp.id);
+            if (t !== undefined) {
+              if (resolvedType === null) resolvedType = t;
+              else if (resolvedType !== t) resolvedType = wasmFormat.TYPE_F64;
+            }
+          }
+          if (resolvedType !== null) nodeWasmType.set(phi.id, resolvedType);
+        }
+        speculativeChanged = false;
+        for (const block of graph.blocks) {
+          for (const node of block.nodes) {
+            if (speculativeNodes.has(node.id)) continue;
+            if (!node.frameState) continue;
+            const hasF64b = SPECULATIVE_ARITH_F64[node.type] !== undefined;
+            const isCmpB = SPECULATIVE_COMPARE.has(node.type);
+            if (!hasF64b && !isCmpB) continue;
+            const lt2 = nodeWasmType.get(node.inputs[0]?.id);
+            const rt2 = nodeWasmType.get(node.inputs[1]?.id);
+            if (lt2 === undefined || rt2 === undefined) continue;
+            speculativeChanged = true;
+            break;
+          }
+          if (speculativeChanged) break;
+        }
+      }
+    }
+
     const paramTypes = [];
     const paramValueReps = [];
     for (const param of graph.parameters) {
@@ -415,6 +703,30 @@ export class WasmCodegen {
       if (pValueRep === REP_HANDLE) needsMemory = true;
       nodeLocal.set(param.id, param.props.index);
     }
+
+    let hasSelfRecursion = false;
+    if (this._selfRecursiveCandidates && this._selfRecursiveCandidates.length > 0) {
+      const allParamsNonHandle = paramValueReps.every((r) => r !== REP_HANDLE);
+      if (allParamsNonHandle) {
+        hasSelfRecursion = true;
+        for (const node of this._selfRecursiveCandidates) {
+          const existingType = nodeWasmType.get(node.id);
+          if (!existingType) {
+            nodeWasmType.set(node.id, wasmTypeForRep(repForNode(node)));
+          }
+        }
+      } else {
+        for (const node of this._selfRecursiveCandidates) {
+          if (!runtimeStubTable.getByNodeId || !nodeWasmType.has(node.id)) {
+            runtimeStubTable.register(node);
+            needsRuntimeStubImport = true;
+            needsMemory = true;
+            nodeWasmType.set(node.id, wasmTypeForRep(repForNode(node)));
+          }
+        }
+      }
+    }
+    this._selfRecursiveCandidates = null;
 
     const localNodesI32 = [];
     const localNodesF64 = [];
@@ -429,6 +741,19 @@ export class WasmCodegen {
         if (wType === wasmFormat.TYPE_I32) localNodesI32.push(node.id);
         else localNodesF64.push(node.id);
       }
+    }
+
+    if (this._typeofConstants) {
+      for (const [, synNode] of this._typeofConstants) {
+        localNodesI32.push(synNode.id);
+      }
+    }
+
+    for (const orphan of orphanConstants) {
+      if (nodeLocal.has(orphan.id)) continue;
+      const owt = nodeWasmType.get(orphan.id) || wasmFormat.TYPE_I32;
+      if (owt === wasmFormat.TYPE_I32) localNodesI32.push(orphan.id);
+      else localNodesF64.push(orphan.id);
     }
 
     let nextLocal = graph.parameterCount;
@@ -448,7 +773,8 @@ export class WasmCodegen {
     let hasOverflowChecks = false;
     for (const block of graph.blocks) {
       for (const node of block.nodes) {
-        if (INT32_OVERFLOW_CHECK.has(node.type)) {
+        if (INT32_OVERFLOW_CHECK.has(node.type) ||
+            (node._speculativeType && INT32_OVERFLOW_CHECK.has(node._speculativeType))) {
           hasOverflowChecks = true;
           break;
         }
@@ -563,7 +889,14 @@ export class WasmCodegen {
     }
 
     const _nonPrimitiveConstants = this._nonPrimitiveConstants || [];
+    const _syntheticConstants = this._typeofConstants
+      ? [...this._typeofConstants.values()]
+      : [];
+    const globalCellOffsets = this._globalCellOffsets || null;
     this._nonPrimitiveConstants = null;
+    this._typeofConstants = null;
+    this._globalCellOffsets = null;
+    this._globalCandidates = null;
 
     return {
       paramTypes,
@@ -590,6 +923,13 @@ export class WasmCodegen {
       hasInlineAlloc,
       _localSlotMap,
       _nonPrimitiveConstants,
+      _syntheticConstants,
+      globalCellOffsets,
+      hasSelfRecursion,
+      _compiledFn: hasSelfRecursion ? compiledFn : null,
+      orphanConstants,
+      mathCallIntrinsics,
+      mathCallDead,
     };
   }
 
@@ -608,6 +948,42 @@ export class WasmCodegen {
     allocObjImportIdx,
   ) {
     const bytes = [];
+
+    if (analysis._syntheticConstants) {
+      for (const synNode of analysis._syntheticConstants) {
+        const loc = analysis.nodeLocal.get(synNode.id);
+        if (loc !== undefined && synNode._constPtrIndex !== undefined) {
+          bytes.push(
+            wasmFormat.OP_I32_CONST,
+            ...wasmFormat.encodeS32(synNode._constPtrIndex),
+          );
+          bytes.push(wasmFormat.OP_LOCAL_SET, ...wasmFormat.encodeU32(loc));
+        }
+      }
+    }
+
+    if (analysis.orphanConstants) {
+      for (const orphan of analysis.orphanConstants) {
+        const loc = analysis.nodeLocal.get(orphan.id);
+        if (loc === undefined) continue;
+        const v = orphan.props?.value;
+        const wType = analysis.nodeWasmType.get(orphan.id);
+        if (wType === wasmFormat.TYPE_F64) {
+          bytes.push(
+            wasmFormat.OP_F64_CONST,
+            ...wasmFormat.encodeF64(typeof v === "number" ? v : 0),
+          );
+        } else {
+          const intVal = typeof v === "boolean" ? (v ? 1 : 0) : (typeof v === "number" ? v | 0 : 0);
+          bytes.push(
+            wasmFormat.OP_I32_CONST,
+            ...wasmFormat.encodeS32(intVal),
+          );
+        }
+        bytes.push(wasmFormat.OP_LOCAL_SET, ...wasmFormat.encodeU32(loc));
+      }
+    }
+
     const order = computeBlockOrder(graph);
     const backEdges = findBackEdges(graph, order);
     const loopHeaders = findLoopHeaders(backEdges);
@@ -1201,6 +1577,311 @@ export class WasmCodegen {
     }
   }
 
+  emitSpeculativeArith(node, analysis, bytes, deoptImportIdx) {
+    const local = (nodeId) => this.resolveLocal(nodeId, analysis);
+    const loc = analysis.nodeLocal.get(node.id);
+    const specType = node._speculativeType;
+    const fsId = node.frameState?.id ?? 0;
+
+    if (specType === ir.IR_INT32_COMPARE || specType === ir.IR_FLOAT64_COMPARE) {
+      if (loc === undefined) return;
+      const useF64 = specType === ir.IR_FLOAT64_COMPARE;
+      const opEntry = COMPARE_OPS[node.props.op];
+      if (!opEntry) return;
+      const opcode = useF64 ? opEntry.f64 : opEntry.i32;
+      const lt = analysis.nodeWasmType.get(node.inputs[0].id);
+      const rt = analysis.nodeWasmType.get(node.inputs[1].id);
+      bytes.push(wasmFormat.OP_LOCAL_GET, ...wasmFormat.encodeU32(local(node.inputs[0].id)));
+      if (useF64 && lt === wasmFormat.TYPE_I32) bytes.push(wasmFormat.OP_F64_CONVERT_I32_S);
+      bytes.push(wasmFormat.OP_LOCAL_GET, ...wasmFormat.encodeU32(local(node.inputs[1].id)));
+      if (useF64 && rt === wasmFormat.TYPE_I32) bytes.push(wasmFormat.OP_F64_CONVERT_I32_S);
+      bytes.push(opcode);
+      bytes.push(wasmFormat.OP_LOCAL_SET, ...wasmFormat.encodeU32(loc));
+      return;
+    }
+
+    if (INT32_ARITH.has(specType)) {
+      if (loc === undefined) return;
+      const lt = analysis.nodeWasmType.get(node.inputs[0].id);
+      const rt = analysis.nodeWasmType.get(node.inputs[1].id);
+      if (INT32_OVERFLOW_CHECK.has(specType) && analysis.hasOverflowChecks && deoptImportIdx >= 0) {
+        const tmpLocal = analysis.overflowTempLocal;
+        bytes.push(wasmFormat.OP_LOCAL_GET, ...wasmFormat.encodeU32(local(node.inputs[0].id)));
+        if (lt === wasmFormat.TYPE_F64) bytes.push(wasmFormat.OP_I32_TRUNC_F64_S);
+        bytes.push(wasmFormat.OP_I64_EXTEND_I32_S);
+        bytes.push(wasmFormat.OP_LOCAL_GET, ...wasmFormat.encodeU32(local(node.inputs[1].id)));
+        if (rt === wasmFormat.TYPE_F64) bytes.push(wasmFormat.OP_I32_TRUNC_F64_S);
+        bytes.push(wasmFormat.OP_I64_EXTEND_I32_S);
+        bytes.push(INT64_ARITH_OPCODES[specType]);
+        bytes.push(wasmFormat.OP_LOCAL_TEE, ...wasmFormat.encodeU32(tmpLocal));
+        bytes.push(wasmFormat.OP_I64_CONST, ...wasmFormat.encodeS64(2147483647));
+        bytes.push(wasmFormat.OP_I64_GT_S);
+        bytes.push(wasmFormat.OP_LOCAL_GET, ...wasmFormat.encodeU32(tmpLocal));
+        bytes.push(wasmFormat.OP_I64_CONST, ...wasmFormat.encodeS64(-2147483648));
+        bytes.push(wasmFormat.OP_I64_LT_S);
+        bytes.push(wasmFormat.OP_I32_OR);
+        bytes.push(wasmFormat.OP_IF, wasmFormat.TYPE_VOID);
+        this.emitDeoptSnapshot(node.frameState, analysis, bytes);
+        bytes.push(wasmFormat.OP_I32_CONST, ...wasmFormat.encodeS32(deoptReasonId(DEOPT_OVERFLOW)));
+        bytes.push(wasmFormat.OP_I32_CONST, ...wasmFormat.encodeS32(fsId));
+        bytes.push(wasmFormat.OP_CALL, ...wasmFormat.encodeU32(deoptImportIdx));
+        bytes.push(wasmFormat.OP_UNREACHABLE);
+        bytes.push(wasmFormat.OP_END);
+        bytes.push(wasmFormat.OP_LOCAL_GET, ...wasmFormat.encodeU32(tmpLocal));
+        bytes.push(wasmFormat.OP_I32_WRAP_I64);
+      } else {
+        bytes.push(wasmFormat.OP_LOCAL_GET, ...wasmFormat.encodeU32(local(node.inputs[0].id)));
+        if (lt === wasmFormat.TYPE_F64) bytes.push(wasmFormat.OP_I32_TRUNC_F64_S);
+        bytes.push(wasmFormat.OP_LOCAL_GET, ...wasmFormat.encodeU32(local(node.inputs[1].id)));
+        if (rt === wasmFormat.TYPE_F64) bytes.push(wasmFormat.OP_I32_TRUNC_F64_S);
+        bytes.push(INT32_ARITH_OPCODES[specType]);
+      }
+      bytes.push(wasmFormat.OP_LOCAL_SET, ...wasmFormat.encodeU32(loc));
+      return;
+    }
+
+    if (FLOAT64_ARITH.has(specType)) {
+      if (loc === undefined) return;
+      const lt = analysis.nodeWasmType.get(node.inputs[0].id);
+      const rt = analysis.nodeWasmType.get(node.inputs[1].id);
+      bytes.push(wasmFormat.OP_LOCAL_GET, ...wasmFormat.encodeU32(local(node.inputs[0].id)));
+      if (lt === wasmFormat.TYPE_I32) bytes.push(wasmFormat.OP_F64_CONVERT_I32_S);
+      bytes.push(wasmFormat.OP_LOCAL_GET, ...wasmFormat.encodeU32(local(node.inputs[1].id)));
+      if (rt === wasmFormat.TYPE_I32) bytes.push(wasmFormat.OP_F64_CONVERT_I32_S);
+      bytes.push(FLOAT64_ARITH_OPCODES[specType]);
+      bytes.push(wasmFormat.OP_LOCAL_SET, ...wasmFormat.encodeU32(loc));
+      return;
+    }
+  }
+
+  emitSelfRecursiveCall(node, analysis, bytes) {
+    const loc = analysis.nodeLocal.get(node.id);
+    const { paramTypes } = analysis;
+    for (let i = 0; i < node.inputs.length; i++) {
+      const input = node.inputs[i];
+      const inputLocal = this.resolveLocal(input.id, analysis);
+      const inputType = analysis.nodeWasmType.get(input.id);
+      const targetType = paramTypes[i];
+      if (inputLocal !== undefined) {
+        bytes.push(
+          wasmFormat.OP_LOCAL_GET,
+          ...wasmFormat.encodeU32(inputLocal),
+        );
+        if (inputType !== targetType) {
+          if (inputType === wasmFormat.TYPE_I32 && targetType === wasmFormat.TYPE_F64)
+            bytes.push(wasmFormat.OP_F64_CONVERT_I32_S);
+          else if (inputType === wasmFormat.TYPE_F64 && targetType === wasmFormat.TYPE_I32)
+            bytes.push(wasmFormat.OP_I32_TRUNC_F64_S);
+        }
+      } else {
+        if (targetType === wasmFormat.TYPE_F64)
+          bytes.push(wasmFormat.OP_F64_CONST, ...wasmFormat.encodeF64(0));
+        else
+          bytes.push(wasmFormat.OP_I32_CONST, ...wasmFormat.encodeS32(0));
+      }
+    }
+    bytes.push(
+      wasmFormat.OP_CALL,
+      ...wasmFormat.encodeU32(analysis.selfCallFuncIdx),
+    );
+    if (loc !== undefined) {
+      const outType = analysis.nodeWasmType.get(node.id);
+      if (outType !== analysis.resultType) {
+        if (analysis.resultType === wasmFormat.TYPE_F64 && outType === wasmFormat.TYPE_I32)
+          bytes.push(wasmFormat.OP_I32_TRUNC_F64_S);
+        else if (analysis.resultType === wasmFormat.TYPE_I32 && outType === wasmFormat.TYPE_F64)
+          bytes.push(wasmFormat.OP_F64_CONVERT_I32_S);
+      }
+      bytes.push(wasmFormat.OP_LOCAL_SET, ...wasmFormat.encodeU32(loc));
+    } else {
+      bytes.push(wasmFormat.OP_DROP);
+    }
+  }
+
+  emitGlobalCellAccess(node, offset, analysis, bytes) {
+    const local = (nodeId) => this.resolveLocal(nodeId, analysis);
+
+    if (node.type === ir.IR_LOAD_GLOBAL) {
+      const loc = analysis.nodeLocal.get(node.id);
+      if (loc === undefined) return;
+      const outType = analysis.nodeWasmType.get(node.id);
+      bytes.push(
+        wasmFormat.OP_I32_CONST,
+        ...wasmFormat.encodeS32(offset),
+      );
+      bytes.push(
+        wasmFormat.OP_F64_LOAD,
+        ...wasmFormat.encodeU32(3),
+        ...wasmFormat.encodeU32(0),
+      );
+      if (outType === wasmFormat.TYPE_I32) {
+        bytes.push(wasmFormat.OP_I32_TRUNC_F64_S);
+      }
+      bytes.push(wasmFormat.OP_LOCAL_SET, ...wasmFormat.encodeU32(loc));
+    } else {
+      const inputLocal = local(node.inputs[0].id);
+      const inputType = analysis.nodeWasmType.get(node.inputs[0].id);
+      bytes.push(
+        wasmFormat.OP_I32_CONST,
+        ...wasmFormat.encodeS32(offset),
+      );
+      bytes.push(
+        wasmFormat.OP_LOCAL_GET,
+        ...wasmFormat.encodeU32(inputLocal),
+      );
+      if (inputType === wasmFormat.TYPE_I32) {
+        bytes.push(wasmFormat.OP_F64_CONVERT_I32_S);
+      }
+      bytes.push(
+        wasmFormat.OP_F64_STORE,
+        ...wasmFormat.encodeU32(3),
+        ...wasmFormat.encodeU32(0),
+      );
+    }
+  }
+
+  emitNativeNode(node, analysis, bytes) {
+    const local = (nodeId) => this.resolveLocal(nodeId, analysis);
+    const loc = analysis.nodeLocal.get(node.id);
+
+    if (GENERIC_BITWISE_OPCODES[node.type] !== undefined) {
+      if (loc === undefined) return;
+      const leftType = analysis.nodeWasmType.get(node.inputs[0].id);
+      const rightType = analysis.nodeWasmType.get(node.inputs[1].id);
+      bytes.push(
+        wasmFormat.OP_LOCAL_GET,
+        ...wasmFormat.encodeU32(local(node.inputs[0].id)),
+      );
+      if (leftType === wasmFormat.TYPE_F64)
+        bytes.push(wasmFormat.OP_I32_TRUNC_F64_S);
+      bytes.push(
+        wasmFormat.OP_LOCAL_GET,
+        ...wasmFormat.encodeU32(local(node.inputs[1].id)),
+      );
+      if (rightType === wasmFormat.TYPE_F64)
+        bytes.push(wasmFormat.OP_I32_TRUNC_F64_S);
+      bytes.push(GENERIC_BITWISE_OPCODES[node.type]);
+      bytes.push(wasmFormat.OP_LOCAL_SET, ...wasmFormat.encodeU32(loc));
+      return;
+    }
+
+    if (node.type === ir.IR_GENERIC_BITNOT) {
+      if (loc === undefined) return;
+      const inputType = analysis.nodeWasmType.get(node.inputs[0].id);
+      bytes.push(
+        wasmFormat.OP_LOCAL_GET,
+        ...wasmFormat.encodeU32(local(node.inputs[0].id)),
+      );
+      if (inputType === wasmFormat.TYPE_F64)
+        bytes.push(wasmFormat.OP_I32_TRUNC_F64_S);
+      bytes.push(wasmFormat.OP_I32_CONST, ...wasmFormat.encodeS32(-1));
+      bytes.push(wasmFormat.OP_I32_XOR);
+      bytes.push(wasmFormat.OP_LOCAL_SET, ...wasmFormat.encodeU32(loc));
+      return;
+    }
+
+    if (node.type === ir.IR_NOT) {
+      if (loc === undefined) return;
+      const inputType = analysis.nodeWasmType.get(node.inputs[0].id);
+      bytes.push(
+        wasmFormat.OP_LOCAL_GET,
+        ...wasmFormat.encodeU32(local(node.inputs[0].id)),
+      );
+      if (inputType === wasmFormat.TYPE_F64)
+        bytes.push(wasmFormat.OP_I32_TRUNC_F64_S);
+      bytes.push(wasmFormat.OP_I32_EQZ);
+      bytes.push(wasmFormat.OP_LOCAL_SET, ...wasmFormat.encodeU32(loc));
+      return;
+    }
+
+    if (node.type === ir.IR_NEG) {
+      if (loc === undefined) return;
+      const rep = repForNode(node);
+      const inputLocal = local(node.inputs[0].id);
+      const inputType = analysis.nodeWasmType.get(node.inputs[0].id);
+      if (rep === REP_FLOAT64 || rep === REP_TAGGED_NUMBER) {
+        bytes.push(
+          wasmFormat.OP_LOCAL_GET,
+          ...wasmFormat.encodeU32(inputLocal),
+        );
+        if (inputType === wasmFormat.TYPE_I32)
+          bytes.push(wasmFormat.OP_F64_CONVERT_I32_S);
+        bytes.push(wasmFormat.OP_F64_NEG);
+        bytes.push(wasmFormat.OP_LOCAL_SET, ...wasmFormat.encodeU32(loc));
+      } else {
+        bytes.push(wasmFormat.OP_I32_CONST, ...wasmFormat.encodeS32(0));
+        bytes.push(
+          wasmFormat.OP_LOCAL_GET,
+          ...wasmFormat.encodeU32(inputLocal),
+        );
+        if (inputType === wasmFormat.TYPE_F64)
+          bytes.push(wasmFormat.OP_I32_TRUNC_F64_S);
+        bytes.push(wasmFormat.OP_I32_SUB);
+        bytes.push(wasmFormat.OP_LOCAL_SET, ...wasmFormat.encodeU32(loc));
+      }
+      return;
+    }
+
+    if (node.type === ir.IR_TYPEOF) {
+      return;
+    }
+  }
+
+  emitMathIntrinsic(node, intrinsic, analysis, bytes) {
+    const local = (nodeId) => this.resolveLocal(nodeId, analysis);
+    const loc = analysis.nodeLocal.get(node.id);
+    if (loc === undefined) return;
+
+    for (let i = 0; i < intrinsic.arity; i++) {
+      const inputLocal = local(node.inputs[i].id);
+      const inputType = analysis.nodeWasmType.get(node.inputs[i].id);
+      bytes.push(
+        wasmFormat.OP_LOCAL_GET,
+        ...wasmFormat.encodeU32(inputLocal),
+      );
+      if (inputType === wasmFormat.TYPE_I32)
+        bytes.push(wasmFormat.OP_F64_CONVERT_I32_S);
+    }
+    bytes.push(intrinsic.opcode);
+    bytes.push(wasmFormat.OP_LOCAL_SET, ...wasmFormat.encodeU32(loc));
+  }
+
+  emitPowSpecialCase(node, exp, analysis, bytes) {
+    const local = (nodeId) => this.resolveLocal(nodeId, analysis);
+    const loc = analysis.nodeLocal.get(node.id);
+    if (loc === undefined) return;
+
+    const baseLocal = local(node.inputs[0].id);
+    const baseType = analysis.nodeWasmType.get(node.inputs[0].id);
+
+    const pushBase = () => {
+      bytes.push(
+        wasmFormat.OP_LOCAL_GET,
+        ...wasmFormat.encodeU32(baseLocal),
+      );
+      if (baseType === wasmFormat.TYPE_I32)
+        bytes.push(wasmFormat.OP_F64_CONVERT_I32_S);
+    };
+
+    if (exp === 0) {
+      bytes.push(wasmFormat.OP_F64_CONST, ...wasmFormat.encodeF64(1.0));
+    } else if (exp === 1) {
+      pushBase();
+    } else if (exp === 2) {
+      pushBase();
+      pushBase();
+      bytes.push(wasmFormat.OP_F64_MUL);
+    } else if (exp === 0.5) {
+      pushBase();
+      bytes.push(wasmFormat.OP_F64_SQRT);
+    } else if (exp === -1) {
+      bytes.push(wasmFormat.OP_F64_CONST, ...wasmFormat.encodeF64(1.0));
+      pushBase();
+      bytes.push(wasmFormat.OP_F64_DIV);
+    }
+    bytes.push(wasmFormat.OP_LOCAL_SET, ...wasmFormat.encodeU32(loc));
+  }
+
   emitNode(
     node,
     analysis,
@@ -1294,6 +1975,109 @@ export class WasmCodegen {
 
     if (this.needsFieldRuntimeStub(node)) {
       this.emitRuntimeStubCall(node, analysis, bytes, runtimeStubImportIdx);
+      return;
+    }
+
+    if (isNativeEligible(node)) {
+      this.emitNativeNode(node, analysis, bytes);
+      return;
+    }
+
+    {
+      const intrinsic = mathIntrinsicForNode(node);
+      if (intrinsic) {
+        this.emitMathIntrinsic(node, intrinsic, analysis, bytes);
+        return;
+      }
+    }
+
+    if (
+      node.type === ir.IR_FLOAT64_POW &&
+      node.inputs[1]?.type === ir.IR_CONSTANT &&
+      typeof node.inputs[1].props.value === "number"
+    ) {
+      const exp = node.inputs[1].props.value;
+      if (exp === 0 || exp === 1 || exp === 2 || exp === 0.5 || exp === -1) {
+        this.emitPowSpecialCase(node, exp, analysis, bytes);
+        return;
+      }
+    }
+
+    if (
+      analysis.globalCellOffsets &&
+      (node.type === ir.IR_LOAD_GLOBAL || node.type === ir.IR_STORE_GLOBAL)
+    ) {
+      const offset = analysis.globalCellOffsets.get(node.props.name);
+      if (offset !== undefined) {
+        this.emitGlobalCellAccess(node, offset, analysis, bytes);
+        return;
+      }
+    }
+
+    if (
+      analysis.hasSelfRecursion &&
+      node.type === ir.IR_CALL_KNOWN_FUNCTION &&
+      node.props.target === analysis._compiledFn
+    ) {
+      this.emitSelfRecursiveCall(node, analysis, bytes);
+      return;
+    }
+
+    if (node._speculativeType) {
+      this.emitSpeculativeArith(node, analysis, bytes, deoptImportIdx);
+      return;
+    }
+
+    if (node._deadForSelfRecursion) {
+      return;
+    }
+
+    if (analysis.mathCallDead.has(node.id)) {
+      return;
+    }
+
+    {
+      const mathInfo = analysis.mathCallIntrinsics.get(node.id);
+      if (mathInfo) {
+        const loc = analysis.nodeLocal.get(node.id);
+        if (loc !== undefined) {
+          for (const argInput of mathInfo.argInputs) {
+            const argLocal = this.resolveLocal(argInput.id, analysis);
+            const argType = analysis.nodeWasmType.get(argInput.id);
+            bytes.push(wasmFormat.OP_LOCAL_GET, ...wasmFormat.encodeU32(argLocal));
+            if (argType === wasmFormat.TYPE_I32) bytes.push(wasmFormat.OP_F64_CONVERT_I32_S);
+          }
+          bytes.push(mathInfo.intrinsic.opcode);
+          bytes.push(wasmFormat.OP_LOCAL_SET, ...wasmFormat.encodeU32(loc));
+        }
+        return;
+      }
+    }
+
+    if (
+      (node.type === ir.IR_GENERIC_ADD ||
+        node.type === ir.IR_GENERIC_SUB ||
+        node.type === ir.IR_GENERIC_MUL) &&
+      analysis.nodeWasmType.get(node.id) === wasmFormat.TYPE_F64 &&
+      !analysis.runtimeStubTable.getByNodeId?.(node.id)
+    ) {
+      const loc = analysis.nodeLocal.get(node.id);
+      if (loc !== undefined) {
+        const GENERIC_F64_OP = {
+          [ir.IR_GENERIC_ADD]: wasmFormat.OP_F64_ADD,
+          [ir.IR_GENERIC_SUB]: wasmFormat.OP_F64_SUB,
+          [ir.IR_GENERIC_MUL]: wasmFormat.OP_F64_MUL,
+        };
+        for (let i = 0; i < 2; i++) {
+          const inp = node.inputs[i];
+          const inpLocal = this.resolveLocal(inp.id, analysis);
+          const inpType = analysis.nodeWasmType.get(inp.id);
+          bytes.push(wasmFormat.OP_LOCAL_GET, ...wasmFormat.encodeU32(inpLocal));
+          if (inpType === wasmFormat.TYPE_I32) bytes.push(wasmFormat.OP_F64_CONVERT_I32_S);
+        }
+        bytes.push(GENERIC_F64_OP[node.type]);
+        bytes.push(wasmFormat.OP_LOCAL_SET, ...wasmFormat.encodeU32(loc));
+      }
       return;
     }
 
@@ -1565,8 +2349,32 @@ export class WasmCodegen {
 
         const leftType = analysis.nodeWasmType.get(node.inputs[0].id);
         const rightType = analysis.nodeWasmType.get(node.inputs[1].id);
+        const outType = analysis.nodeWasmType.get(node.id);
 
         if (
+          INT32_OVERFLOW_CHECK.has(node.type) &&
+          !node.props.noOverflow &&
+          outType === wasmFormat.TYPE_F64
+        ) {
+          const F64_FOR_INT32 = {
+            [ir.IR_INT32_ADD]: wasmFormat.OP_F64_ADD,
+            [ir.IR_INT32_SUB]: wasmFormat.OP_F64_SUB,
+            [ir.IR_INT32_MUL]: wasmFormat.OP_F64_MUL,
+          };
+          bytes.push(
+            wasmFormat.OP_LOCAL_GET,
+            ...wasmFormat.encodeU32(local(node.inputs[0].id)),
+          );
+          if (leftType === wasmFormat.TYPE_I32)
+            bytes.push(wasmFormat.OP_F64_CONVERT_I32_S);
+          bytes.push(
+            wasmFormat.OP_LOCAL_GET,
+            ...wasmFormat.encodeU32(local(node.inputs[1].id)),
+          );
+          if (rightType === wasmFormat.TYPE_I32)
+            bytes.push(wasmFormat.OP_F64_CONVERT_I32_S);
+          bytes.push(F64_FOR_INT32[node.type]);
+        } else if (
           INT32_OVERFLOW_CHECK.has(node.type) &&
           analysis.hasOverflowChecks &&
           deoptImportIdx >= 0 &&
@@ -1740,15 +2548,22 @@ export class WasmCodegen {
         if (loc === undefined) break;
         const op = COMPARE_OPS[node.props.op];
         if (!op) break;
+        const cmpLeftType = analysis.nodeWasmType.get(node.inputs[0].id);
+        const cmpRightType = analysis.nodeWasmType.get(node.inputs[1].id);
+        const useF64Cmp = cmpLeftType === wasmFormat.TYPE_F64 || cmpRightType === wasmFormat.TYPE_F64;
         bytes.push(
           wasmFormat.OP_LOCAL_GET,
           ...wasmFormat.encodeU32(local(node.inputs[0].id)),
         );
+        if (useF64Cmp && cmpLeftType === wasmFormat.TYPE_I32)
+          bytes.push(wasmFormat.OP_F64_CONVERT_I32_S);
         bytes.push(
           wasmFormat.OP_LOCAL_GET,
           ...wasmFormat.encodeU32(local(node.inputs[1].id)),
         );
-        bytes.push(op.i32);
+        if (useF64Cmp && cmpRightType === wasmFormat.TYPE_I32)
+          bytes.push(wasmFormat.OP_F64_CONVERT_I32_S);
+        bytes.push(useF64Cmp ? op.f64 : op.i32);
         bytes.push(wasmFormat.OP_LOCAL_SET, ...wasmFormat.encodeU32(loc));
         break;
       }
@@ -2166,7 +2981,7 @@ export class WasmCodegen {
       return null;
     }
 
-    const analysis = this.analyzeGraph(graph);
+    const analysis = this.analyzeGraph(graph, compiledFn);
     if (!analysis) {
       tracer.jitCompile(
         compiledFn.name,
@@ -2244,6 +3059,10 @@ export class WasmCodegen {
     builder.addFunction(funcTypeIdx);
 
     builder.addExport("opt", importFuncCount);
+
+    if (analysis.hasSelfRecursion) {
+      analysis.selfCallFuncIdx = importFuncCount;
+    }
 
     const bodyBytes = this.generateBody(
       graph,
@@ -2483,7 +3302,11 @@ export class WasmCodegen {
           recordWasmDeopt(reason, 0);
 
           const frameState = guard.frameState;
-          if (frameState?.isInlinedFrame) {
+          if (!frameState) {
+            const frame = new RegisterFrame(compiledFn, args, thisValue);
+            return interpreter.resumeAt(frame);
+          }
+          if (frameState.isInlinedFrame) {
             return resumeFrameStateChain(
               args,
               thisValue,
@@ -2492,8 +3315,12 @@ export class WasmCodegen {
               interpreter,
             );
           }
+          if (frameState.bytecodeIdx === undefined || frameState.bytecodeIdx !== 0) {
+            const frame = new RegisterFrame(compiledFn, args, thisValue);
+            return interpreter.resumeAt(frame);
+          }
           const frame = materializeFrameFromState(
-            frameState?.compiledFunction || compiledFn,
+            frameState.compiledFunction || compiledFn,
             args,
             thisValue,
             frameState,
@@ -2686,6 +3513,18 @@ export class WasmCodegen {
         throw new RangeError("Maximum call stack size exceeded");
       }
 
+      if (analysis.globalCellOffsets && memory) {
+        const gcEnd = 32768 + analysis.globalCellOffsets.size * 8;
+        ensureMemory(gcEnd);
+        const dv = new DataView(memory.buffer);
+        for (const [name, offset] of analysis.globalCellOffsets) {
+          const cell = interpreter.globalCells.get(name);
+          const val = cell ? cell.read() : mkUndefined();
+          const raw = isNumber(val) ? toNumber(val) : 0;
+          dv.setFloat64(offset, raw, true);
+        }
+      }
+
       try {
         rawResult = wasmFn(...rawArgs);
       } catch (e) {
@@ -2696,6 +3535,14 @@ export class WasmCodegen {
           if (needsMemory) {
             for (const info of objPtrs.values()) {
               deserializeObject(info.obj, memory, info.ptr);
+            }
+          }
+
+          if (analysis.globalCellOffsets && memory) {
+            const dv = new DataView(memory.buffer);
+            for (const [name, offset] of analysis.globalCellOffsets) {
+              const raw = dv.getFloat64(offset, true);
+              interpreter.globalCells.write(name, mkNumber(raw));
             }
           }
 
@@ -2739,6 +3586,14 @@ export class WasmCodegen {
       wasmCallDepth--;
       threadLocal.currentObjPtrs = prevObjPtrs;
       threadLocal.currentRuntime = prevRuntime;
+
+      if (analysis.globalCellOffsets && memory) {
+        const dv = new DataView(memory.buffer);
+        for (const [name, offset] of analysis.globalCellOffsets) {
+          const raw = dv.getFloat64(offset, true);
+          interpreter.globalCells.write(name, mkNumber(raw));
+        }
+      }
 
       if (analysis.hasInlineAlloc) {
         const dv = new DataView(memory.buffer);

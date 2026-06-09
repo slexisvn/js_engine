@@ -34,8 +34,8 @@ export class RegisterFrame {
     this.closureEnv = closureEnv || null;
     this.openUpvalues = null;
     this.hasUpvalues = false;
-    this.originalArgs = args.slice();
-    this.exceptionHandlers = [];
+    this.originalArgs = args;
+    this.exceptionHandlers = null;
     this.locals = this.registers;
 
     for (let i = 0; i < args.length && i < compiledFn.paramCount; i++) {

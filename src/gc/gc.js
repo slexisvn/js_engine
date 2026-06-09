@@ -11,6 +11,9 @@ const MAJOR_GC_RATIO = 0.75;
 const MAJOR_GC_GROWTH_FACTOR = 1.5;
 const DEFAULT_ALLOCATION_BUDGET = 4096;
 const PRETENURE_SIZE_THRESHOLD = 512;
+const MIN_ALLOCATION_BUDGET = 1024;
+const MAX_ALLOCATION_BUDGET = 65536;
+const DEFAULT_TARGET_PAUSE_MS = 2;
 
 export class GenerationalGC {
   constructor(options = {}) {
@@ -26,6 +29,7 @@ export class GenerationalGC {
     this._allocationBudget = options.allocationBudget || DEFAULT_ALLOCATION_BUDGET;
     this._allocationsSinceGC = 0;
     this._majorGCThreshold = 0;
+    this._targetPauseMs = options.targetPauseMs || DEFAULT_TARGET_PAUSE_MS;
 
     this.stats = {
       minorGCCount: 0,
@@ -160,17 +164,29 @@ export class GenerationalGC {
     this.toSpace.reset();
 
     this.rememberedSet.clear();
-    this._rebuildRememberedSetFromOldGen();
 
     this.stats.minorGCCount++;
     this.stats.totalPromoted += promoted;
     this._allocationsSinceGC = 0;
 
-    const elapsed = (performance.now() - startTime).toFixed(2);
+    const elapsedMs = performance.now() - startTime;
+    const elapsed = elapsedMs.toFixed(2);
     tracer.log(
       "GC",
       `Scavenge end — copied: ${copied}, promoted: ${promoted}, time: ${elapsed}ms`,
     );
+
+    if (elapsedMs > this._targetPauseMs) {
+      this._allocationBudget = Math.max(
+        MIN_ALLOCATION_BUDGET,
+        this._allocationBudget >>> 1,
+      );
+    } else if (elapsedMs < this._targetPauseMs / 2) {
+      this._allocationBudget = Math.min(
+        MAX_ALLOCATION_BUDGET,
+        (this._allocationBudget * 3) >>> 1,
+      );
+    }
 
     this._checkMajorGCTrigger();
   }

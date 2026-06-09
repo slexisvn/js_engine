@@ -141,6 +141,16 @@ export const OP_I32_TRUNC_F64_S = 0xaa;
 export const OP_I32_WRAP_I64 = 0xa7;
 export const OP_I64_EXTEND_I32_U = 0xad;
 
+export const OP_F64_ABS = 0x99;
+export const OP_F64_NEG = 0x9a;
+export const OP_F64_CEIL = 0x9b;
+export const OP_F64_FLOOR = 0x9c;
+export const OP_F64_TRUNC = 0x9d;
+export const OP_F64_NEAREST = 0x9e;
+export const OP_F64_SQRT = 0x9f;
+export const OP_F64_MIN = 0xa4;
+export const OP_F64_MAX = 0xa5;
+
 export class WasmModuleBuilder {
   constructor() {
     this.types = [];

@@ -109,6 +109,31 @@ describe("RegisterFrame", () => {
 
     expect(frame.thisValue).toBe(thisVal);
     expect(frame.originalArgs).toEqual(args);
-    expect(frame.originalArgs).not.toBe(args);
+  });
+
+  describe("lazy exception handlers", () => {
+    it("exceptionHandlers is null on fresh frame", () => {
+      const fn = makeCompiledFn({ registerCount: 2 });
+      const frame = new RegisterFrame(fn, [], null, null);
+      expect(frame.exceptionHandlers).toBeNull();
+    });
+
+    it("exceptionHandlers can be lazily initialized and used", () => {
+      const fn = makeCompiledFn({ registerCount: 2 });
+      const frame = new RegisterFrame(fn, [], null, null);
+      frame.exceptionHandlers = [];
+      frame.exceptionHandlers.push({ catchPC: 10 });
+      expect(frame.exceptionHandlers).toHaveLength(1);
+      expect(frame.exceptionHandlers[0].catchPC).toBe(10);
+    });
+  });
+
+  describe("originalArgs reference sharing", () => {
+    it("originalArgs references the same array passed in", () => {
+      const fn = makeCompiledFn({ paramCount: 2, registerCount: 3 });
+      const args = [mkSmi(1), mkSmi(2)];
+      const frame = new RegisterFrame(fn, args, null, null);
+      expect(frame.originalArgs).toBe(args);
+    });
   });
 });

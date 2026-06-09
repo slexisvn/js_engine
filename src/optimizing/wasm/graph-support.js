@@ -1,5 +1,6 @@
 import * as ir from "../ir/index.js";
 import {
+  REP_INT32,
   REP_FLOAT64,
   REP_TAGGED_NUMBER,
   REP_HANDLE,
@@ -38,6 +39,15 @@ import {
   OP_F64_SUB,
   OP_F64_MUL,
   OP_F64_DIV,
+  OP_F64_ABS,
+  OP_F64_NEG,
+  OP_F64_CEIL,
+  OP_F64_FLOOR,
+  OP_F64_TRUNC,
+  OP_F64_NEAREST,
+  OP_F64_SQRT,
+  OP_F64_MIN,
+  OP_F64_MAX,
 } from "./wasm-format.js";
 import { ELEMENTS_KIND_IDS } from "./object-layout.js";
 
@@ -131,6 +141,13 @@ export const VALUE_PRODUCING = new Set([
   ir.IR_MEGAMORPHIC_LOAD,
   ir.IR_MEGAMORPHIC_STORE,
   ir.IR_FLOAT64_POW,
+  ir.IR_INT32_SHL,
+  ir.IR_INT32_SHR,
+  ir.IR_INT32_USHR,
+  ir.IR_INT32_AND,
+  ir.IR_INT32_OR,
+  ir.IR_INT32_XOR,
+  ir.IR_INT32_NOT,
   ir.IR_LOAD_GLOBAL,
   ir.IR_NEW_OBJECT,
   ir.IR_NEW_ARRAY,
@@ -385,15 +402,22 @@ export function compileRejectionForNode(node, block) {
     }
   }
 
-  if (
-    node.type === ir.IR_GENERIC_CALL ||
-    node.type === ir.IR_CALL_KNOWN_FUNCTION
-  ) {
+  if (node.type === ir.IR_GENERIC_CALL) {
     const expectedInputs = 1 + node.props.argCount;
     if (
       !Number.isInteger(node.props.argCount) ||
       node.props.argCount < 0 ||
       node.inputs.length !== expectedInputs
+    ) {
+      return `${nodeLocation(node, block)} has invalid call arity`;
+    }
+  }
+
+  if (node.type === ir.IR_CALL_KNOWN_FUNCTION) {
+    if (
+      !Number.isInteger(node.props.argCount) ||
+      node.props.argCount < 0 ||
+      node.inputs.length !== node.props.argCount
     ) {
       return `${nodeLocation(node, block)} has invalid call arity`;
     }
@@ -480,6 +504,85 @@ export const FLOAT64_ARITH_OPCODES = {
   [ir.IR_FLOAT64_MUL]: OP_F64_MUL,
   [ir.IR_FLOAT64_DIV]: OP_F64_DIV,
 };
+
+export const CONDITIONALLY_NATIVE = new Set([
+  ir.IR_GENERIC_BITAND,
+  ir.IR_GENERIC_BITOR,
+  ir.IR_GENERIC_BITXOR,
+  ir.IR_GENERIC_SHL,
+  ir.IR_GENERIC_SHR,
+  ir.IR_GENERIC_USHR,
+  ir.IR_GENERIC_BITNOT,
+  ir.IR_NOT,
+  ir.IR_NEG,
+  ir.IR_TYPEOF,
+]);
+
+export const GENERIC_BITWISE_OPCODES = {
+  [ir.IR_GENERIC_BITAND]: OP_I32_AND,
+  [ir.IR_GENERIC_BITOR]: OP_I32_OR,
+  [ir.IR_GENERIC_BITXOR]: OP_I32_XOR,
+  [ir.IR_GENERIC_SHL]: OP_I32_SHL,
+  [ir.IR_GENERIC_SHR]: OP_I32_SHR_S,
+  [ir.IR_GENERIC_USHR]: OP_I32_SHR_U,
+};
+
+export const SPECULATIVE_ARITH_I32 = {
+  [ir.IR_GENERIC_ADD]: ir.IR_INT32_ADD,
+  [ir.IR_GENERIC_SUB]: ir.IR_INT32_SUB,
+  [ir.IR_GENERIC_MUL]: ir.IR_INT32_MUL,
+  [ir.IR_GENERIC_DIV]: ir.IR_INT32_DIV,
+  [ir.IR_GENERIC_MOD]: ir.IR_INT32_MOD,
+};
+
+export const SPECULATIVE_ARITH_F64 = {
+  [ir.IR_GENERIC_ADD]: ir.IR_FLOAT64_ADD,
+  [ir.IR_GENERIC_SUB]: ir.IR_FLOAT64_SUB,
+  [ir.IR_GENERIC_MUL]: ir.IR_FLOAT64_MUL,
+  [ir.IR_GENERIC_DIV]: ir.IR_FLOAT64_DIV,
+};
+
+export const SPECULATIVE_COMPARE = new Set([
+  ir.IR_GENERIC_COMPARE,
+]);
+
+export function isNativeEligible(node) {
+  const rep = repForNode(node);
+  if (CONDITIONALLY_NATIVE.has(node.type)) {
+    if (node.type === ir.IR_TYPEOF) {
+      return rep !== REP_HANDLE;
+    }
+    if (node.type === ir.IR_NEG) {
+      return rep === REP_INT32 || rep === REP_FLOAT64 || rep === REP_TAGGED_NUMBER;
+    }
+    if (node.type === ir.IR_NOT) {
+      return rep === REP_INT32 || rep === REP_BOOL;
+    }
+    return rep !== REP_HANDLE;
+  }
+  return false;
+}
+
+export const MATH_INTRINSICS = new Map([
+  ["Math.abs", { opcode: OP_F64_ABS, arity: 1 }],
+  ["Math.floor", { opcode: OP_F64_FLOOR, arity: 1 }],
+  ["Math.ceil", { opcode: OP_F64_CEIL, arity: 1 }],
+  ["Math.sqrt", { opcode: OP_F64_SQRT, arity: 1 }],
+  ["Math.trunc", { opcode: OP_F64_TRUNC, arity: 1 }],
+  ["Math.round", { opcode: OP_F64_NEAREST, arity: 1 }],
+  ["Math.min", { opcode: OP_F64_MIN, arity: 2 }],
+  ["Math.max", { opcode: OP_F64_MAX, arity: 2 }],
+]);
+
+export function mathIntrinsicForNode(node) {
+  if (node.type !== ir.IR_CALL_BUILTIN) return null;
+  const name = node.props.name || node.props.builtinName;
+  if (!name) return null;
+  const intrinsic = MATH_INTRINSICS.get(name);
+  if (!intrinsic) return null;
+  if (node.props.argCount !== intrinsic.arity) return null;
+  return intrinsic;
+}
 
 export function computeBlockOrder(graph) {
   const visited = new Set();
@@ -652,6 +755,18 @@ export class RuntimeStubTable {
     this.stubs.push(stub);
     this.byNodeId.set(node.id, stub);
     return stub;
+  }
+
+  unregister(nodeId) {
+    const stub = this.byNodeId.get(nodeId);
+    if (stub) {
+      this.byNodeId.delete(nodeId);
+      const idx = this.stubs.indexOf(stub);
+      if (idx >= 0) this.stubs.splice(idx, 1);
+      for (let i = idx; i < this.stubs.length; i++) {
+        this.stubs[i].id = i;
+      }
+    }
   }
 
   getByNodeId(nodeId) {

@@ -12,6 +12,7 @@ import {
   toBool,
   toDisplayString,
   getPayload,
+  typeOf,
 } from "../../core/value/index.js";
 import {
   DEOPT_ARRAY_CHECK_FAILED,
@@ -138,6 +139,8 @@ export function materializeFrameValue(value, runtimeValues, args, interpreter, t
       case ir.IR_CHECK_CALL_TARGET:
       case ir.IR_BOX:
       case ir.IR_UNBOX:
+      case ir.IR_BLOCK_PARAM:
+      case ir.IR_LOAD_LOCAL:
         return materializeFrameValue(
           value.inputs[0],
           runtimeValues,
@@ -145,6 +148,25 @@ export function materializeFrameValue(value, runtimeValues, args, interpreter, t
           interpreter,
           thisValue,
         );
+    }
+    if (value.type === ir.IR_TYPEOF) {
+      const input = materializeFrameValue(
+        value.inputs[0],
+        runtimeValues,
+        args,
+        interpreter,
+        thisValue,
+      );
+      return mkString(typeOf(input));
+    }
+    if (value.type === ir.IR_STORE_LOCAL) {
+      return materializeFrameValue(
+        value.inputs[1],
+        runtimeValues,
+        args,
+        interpreter,
+        thisValue,
+      );
     }
     if (value.type === ir.IR_PARAMETER) {
       const index = value.props ? value.props.index : -1;

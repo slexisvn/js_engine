@@ -264,26 +264,23 @@ function executeRuntimeCall(
     );
   }
   const fn = getPayload(callee);
-  if (fn.compiled && fn.compiled === compiledFn) {
-    const fs = frameStates ? frameStates[frameStateId] : null;
-    throw new DeoptSignal(
-      DEOPT_RUNTIME_STUB_FAILURE,
-      fs ? fs.bytecodeOffset : 0,
-      [],
-      [],
-      frameStateId,
-      new Map(),
-    );
-  }
   let result;
   if (fn.call) {
     result = fn.call(args, receiver || mkUndefined(), runtime.interpreter);
   } else if (fn.compiled) {
-    result = runtime.interpreter.execute(
-      fn.compiled,
-      args,
-      receiver || mkUndefined(),
-    );
+    if (fn.compiled === compiledFn && fn.compiled.baselineCode) {
+      result = fn.compiled.baselineCode(
+        args,
+        receiver || mkUndefined(),
+        runtime.interpreter,
+      );
+    } else {
+      result = runtime.interpreter.execute(
+        fn.compiled,
+        args,
+        receiver || mkUndefined(),
+      );
+    }
   } else {
     const fs = frameStates ? frameStates[frameStateId] : null;
     throw new DeoptSignal(
@@ -367,11 +364,15 @@ export function executeRuntimeStub(
     case ir.IR_LOAD_GLOBAL: {
       const cell = runtime.interpreter.globalCells.get(node.props.name);
       const val = cell ? cell.read() : mkUndefined();
-      return runtimeReturn(
-        val !== undefined ? val : mkUndefined(),
-        runtime,
-        stub.outputRep,
-      );
+      const resolved = val !== undefined ? val : mkUndefined();
+      if (
+        stub.outputRep === REP_INT32 ||
+        stub.outputRep === REP_FLOAT64 ||
+        stub.outputRep === REP_TAGGED_NUMBER
+      ) {
+        return runtimeReturn(taggedToNumber(resolved), runtime, stub.outputRep);
+      }
+      return runtimeReturn(resolved, runtime, stub.outputRep);
     }
     case ir.IR_STORE_GLOBAL: {
       const val = args[0];

@@ -281,7 +281,6 @@ export class HiddenClass {
       this.propertyCount,
     );
     this.transitions.set(propertyName, newClass);
-    this.markUnstable();
     this.checkStability();
 
     tracer.hcTransition(this.id, newClass.id, propertyName);

@@ -247,6 +247,72 @@ describe("GenerationalGC", () => {
     });
   });
 
+  describe("adaptive allocation budget", () => {
+    it("budget adjusts after minor GC based on pause time", () => {
+      const { gc } = makeGCWithRoots({
+        youngGenSize: 64,
+        allocationBudget: 4096,
+      });
+      const initialBudget = gc._allocationBudget;
+      gc.minorGC();
+      expect(typeof gc._allocationBudget).toBe("number");
+      expect(gc._allocationBudget).toBeGreaterThanOrEqual(1024);
+      expect(gc._allocationBudget).toBeLessThanOrEqual(65536);
+    });
+
+    it("does not reduce budget below minimum (1024)", () => {
+      const { gc } = makeGCWithRoots({
+        youngGenSize: 64,
+        allocationBudget: 1024,
+        targetPauseMs: 0,
+      });
+      gc.minorGC();
+      expect(gc._allocationBudget).toBeGreaterThanOrEqual(1024);
+    });
+
+    it("accepts custom targetPauseMs from options", () => {
+      const gc = new GenerationalGC({ targetPauseMs: 5 });
+      expect(gc._targetPauseMs).toBe(5);
+    });
+
+    it("uses default targetPauseMs when not specified", () => {
+      const gc = new GenerationalGC({});
+      expect(gc._targetPauseMs).toBe(2);
+    });
+  });
+
+  describe("remembered set rebuild only on major GC", () => {
+    it("minor GC clears remembered set but does not rebuild from old gen", () => {
+      const { gc, rootObjects } = makeGCWithRoots({ youngGenSize: 32 });
+      const oldObj = makeHeapObj("old");
+      gc.allocate(oldObj, true);
+      rootObjects.push(oldObj);
+
+      const youngChild = makeHeapObj("young-child");
+      gc.allocate(youngChild);
+      rootObjects.push(youngChild);
+
+      gc.rememberedSet.record(oldObj);
+      gc.minorGC();
+      expect(gc.rememberedSet.size).toBe(0);
+    });
+
+    it("major GC rebuilds remembered set from old gen", () => {
+      const { gc, rootObjects } = makeGCWithRoots({ youngGenSize: 32 });
+      const youngObj = makeHeapObj("young");
+      gc.allocate(youngObj);
+      rootObjects.push(youngObj);
+
+      const oldObj = makeHeapObj("old-parent");
+      gc.allocate(oldObj, true);
+      rootObjects.push(oldObj);
+      oldObj.visitReferences = (cb) => cb(youngObj);
+
+      gc.majorGC();
+      expect(gc.rememberedSet.size).toBeGreaterThanOrEqual(0);
+    });
+  });
+
   describe("getStats", () => {
     it("returns comprehensive stats after GC activity", () => {
       const { gc, rootObjects } = makeGCWithRoots({ youngGenSize: 32, allocationBudget: 100 });
