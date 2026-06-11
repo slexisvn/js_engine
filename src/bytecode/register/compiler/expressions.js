@@ -358,13 +358,12 @@ export const expressionMethods = {
       const methodReg = this.temps.alloc();
       this.func.emit(bytecode.ROP_STAR, methodReg);
 
-      const firstArgReg = node.args.length > 0 ? this.temps.alloc() : 0;
-      const argRegs = [];
-      for (let i = 0; i < node.args.length; i++) {
-        const reg = i === 0 ? firstArgReg : this.temps.alloc();
-        argRegs.push(reg);
+      const argCount = node.args.length;
+      const firstArgReg =
+        argCount > 0 ? this.temps.allocContiguous(argCount) : 0;
+      for (let i = 0; i < argCount; i++) {
         this.compileExpression(node.args[i]);
-        this.func.emit(bytecode.ROP_STAR, reg);
+        this.func.emit(bytecode.ROP_STAR, firstArgReg + i);
       }
 
       this.func.emit(bytecode.ROP_LDA_REG, methodReg);
@@ -373,11 +372,11 @@ export const expressionMethods = {
         bytecode.ROP_CALL_METHOD,
         recvReg,
         firstArgReg,
-        node.args.length,
+        argCount,
         fbSlot,
       );
 
-      for (let i = argRegs.length - 1; i >= 0; i--) this.temps.free(argRegs[i]);
+      for (let i = argCount - 1; i >= 0; i--) this.temps.free(firstArgReg + i);
       this.temps.free(methodReg);
       this.temps.free(recvReg);
     } else {
@@ -385,13 +384,12 @@ export const expressionMethods = {
       this.compileExpression(node.callee);
       this.func.emit(bytecode.ROP_STAR, funcReg);
 
-      const firstArgReg = node.args.length > 0 ? this.temps.alloc() : 0;
-      const argRegs = [];
-      for (let i = 0; i < node.args.length; i++) {
-        const reg = i === 0 ? firstArgReg : this.temps.alloc();
-        argRegs.push(reg);
+      const argCount = node.args.length;
+      const firstArgReg =
+        argCount > 0 ? this.temps.allocContiguous(argCount) : 0;
+      for (let i = 0; i < argCount; i++) {
         this.compileExpression(node.args[i]);
-        this.func.emit(bytecode.ROP_STAR, reg);
+        this.func.emit(bytecode.ROP_STAR, firstArgReg + i);
       }
 
       const fbSlot = this.func.allocFeedbackSlot();
@@ -399,11 +397,11 @@ export const expressionMethods = {
         bytecode.ROP_CALL,
         funcReg,
         firstArgReg,
-        node.args.length,
+        argCount,
         fbSlot,
       );
 
-      for (let i = argRegs.length - 1; i >= 0; i--) this.temps.free(argRegs[i]);
+      for (let i = argCount - 1; i >= 0; i--) this.temps.free(firstArgReg + i);
       this.temps.free(funcReg);
     }
   },
@@ -413,18 +411,17 @@ export const expressionMethods = {
     this.compileExpression(node.callee);
     this.func.emit(bytecode.ROP_STAR, funcReg);
 
-    const firstArgReg = node.args.length > 0 ? this.temps.alloc() : 0;
-    const argRegs = [];
-    for (let i = 0; i < node.args.length; i++) {
-      const reg = i === 0 ? firstArgReg : this.temps.alloc();
-      argRegs.push(reg);
+    const argCount = node.args.length;
+    const firstArgReg =
+      argCount > 0 ? this.temps.allocContiguous(argCount) : 0;
+    for (let i = 0; i < argCount; i++) {
       this.compileExpression(node.args[i]);
-      this.func.emit(bytecode.ROP_STAR, reg);
+      this.func.emit(bytecode.ROP_STAR, firstArgReg + i);
     }
 
-    this.func.emit(bytecode.ROP_NEW, funcReg, firstArgReg, node.args.length);
+    this.func.emit(bytecode.ROP_NEW, funcReg, firstArgReg, argCount);
 
-    for (let i = argRegs.length - 1; i >= 0; i--) this.temps.free(argRegs[i]);
+    for (let i = argCount - 1; i >= 0; i--) this.temps.free(firstArgReg + i);
     this.temps.free(funcReg);
   },
 
@@ -500,16 +497,14 @@ export const expressionMethods = {
     );
 
     if (!hasSpread) {
-      const argRegs = [];
-      const firstReg = node.elements.length > 0 ? this.temps.alloc() : 0;
-      for (let i = 0; i < node.elements.length; i++) {
-        const reg = i === 0 ? firstReg : this.temps.alloc();
-        argRegs.push(reg);
+      const count = node.elements.length;
+      const firstReg = count > 0 ? this.temps.allocContiguous(count) : 0;
+      for (let i = 0; i < count; i++) {
         this.compileExpression(node.elements[i]);
-        this.func.emit(bytecode.ROP_STAR, reg);
+        this.func.emit(bytecode.ROP_STAR, firstReg + i);
       }
-      this.func.emit(bytecode.ROP_NEW_ARRAY, firstReg, node.elements.length);
-      for (let i = argRegs.length - 1; i >= 0; i--) this.temps.free(argRegs[i]);
+      this.func.emit(bytecode.ROP_NEW_ARRAY, firstReg, count);
+      for (let i = count - 1; i >= 0; i--) this.temps.free(firstReg + i);
     } else {
       this.func.emit(bytecode.ROP_NEW_ARRAY, 0, 0);
       const arrReg = this.temps.alloc();

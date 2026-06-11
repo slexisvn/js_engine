@@ -11,6 +11,12 @@ export class TempAllocator {
     return this.func.allocTemp();
   }
 
+  allocContiguous(count) {
+    const base = this.func.registerCount;
+    this.func.registerCount += count;
+    return base;
+  }
+
   free(reg) {
     this.freeTemps.push(reg);
   }

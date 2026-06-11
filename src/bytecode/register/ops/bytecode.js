@@ -90,6 +90,7 @@ export const ROP_LOOSE_EQ = 0x83;
 export const ROP_LOOSE_NEQ = 0x84;
 export const ROP_SET_PROTO = 0x85;
 export const ROP_DEFINE_ACCESSOR = 0x86;
+export const ROP_CLOSE_UPVALUES = 0x87;
 
 const ROPCODE_NAMES = {
   [ROP_LDA_CONST]: "LdaConst",
@@ -169,6 +170,7 @@ const ROPCODE_NAMES = {
   [ROP_LOOSE_NEQ]: "TestLooseNotEqual",
   [ROP_SET_PROTO]: "SetPrototype",
   [ROP_DEFINE_ACCESSOR]: "DefineAccessor",
+  [ROP_CLOSE_UPVALUES]: "CloseUpvalues",
 };
 
 export function rOpcodeName(opcode) {

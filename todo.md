@@ -31,8 +31,22 @@ Kế hoạch fuzz từng phần của engine. Mục tiêu: bắt hết lỗi cor
   - [x] Vòng `for(let …)` lồng nhau / trong catch/finally chạy thiếu lần lặp
         (register temp đè biến loop) — fix `addLocal`
   - [x] `for(let i){for(let i)}` cùng tên bị share slot — fix scope resolution
-  - [ ] *Còn lại (chưa fix, #3)*: per-iteration `let` binding cho closure
-        (`for(let i)` + closure trả `3,3,3` thay vì `0,1,2`)
+- [x] Closures / Scope (#3) — *đã fuzz closure-capture*
+  - [x] Per-iteration `let`/`const` binding cho closure: `for(let)`, `while(){let}`,
+        `for-of`, `for-in` giờ trả `0,1,2` đúng — thêm opcode `ROP_CLOSE_UPVALUES`
+        (đóng upvalue mỗi vòng lặp), chỉ emit khi thân loop có function (loop số học
+        vẫn optimize bình thường)
+  - [x] Nested `for-of`/`for-in` share slot `_iter$`/`_iterResult$`/`_keys$` →
+        corrupt iterator vòng ngoài; fix: mỗi loop cấp slot riêng + compile iterable
+        trước khi cấp slot nội bộ (tránh array literal bị non-contiguous)
+  - [x] **Register contiguity**: array literal VÀ call/new arguments yêu cầu register
+        liên tiếp nhưng `temps.alloc()` từng phần bị non-contiguous khi free-list phân mảnh
+        (vd `matmul(a,b)` với `var a/b=[[..]]` → param undefined; `for(...){let x;
+        for(const j of [0,1,2])}` → array sai). Fix: thêm `allocContiguous` dùng cho cả
+        array literal, CallExpression, CallMethod, NewExpression.
+  - [x] `for(let i){for(const i of …)}` cùng tên: for-of/for-in giờ tạo child scope →
+        biến lặp shadow đúng (trước đây share slot với biến ngoài → loop ngoài chạy 1 lần)
+  - [ ] *Còn lại (chưa fix)*: `arguments` object chưa hỗ trợ (`arguments is not defined`)
 
 ---
 

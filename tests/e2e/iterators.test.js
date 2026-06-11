@@ -81,6 +81,41 @@ describe("E2E: for-of loops", () => {
     `);
     expect(r.value).toBe("0:a 1:b 2:c ");
   });
+
+  it("nested for-of loops keep independent iterators", () => {
+    const r = engine.runValue(`
+      let s = "";
+      for (const i of [0, 1]) {
+        for (const j of [0, 1]) s = s + i + j + " ";
+      }
+      s;
+    `);
+    expect(r.value).toBe("00 01 10 11 ");
+  });
+
+  it("a for-of nested inside a for loop restarts each outer iteration", () => {
+    const r = engine.runValue(`
+      let s = "";
+      for (let i = 0; i < 2; i++) {
+        for (const j of [1, 2, 3]) s = s + j;
+        s = s + "|";
+      }
+      s;
+    `);
+    expect(r.value).toBe("123|123|");
+  });
+
+  it("an inner for-of shadows an outer loop variable of the same name", () => {
+    const r = engine.runValue(`
+      let s = "";
+      for (let i = 0; i < 3; i++) {
+        for (const i of [0, 1, 2]) s = s + i;
+        s = s + "|";
+      }
+      s;
+    `);
+    expect(r.value).toBe("012|012|012|");
+  });
 });
 
 describe("E2E: for-in loops", () => {

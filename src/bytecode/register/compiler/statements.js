@@ -114,7 +114,33 @@ export const statementMethods = {
     }
   },
 
+  _bodyMayCapture(node) {
+    if (!node || typeof node !== "object") return false;
+    switch (node.type) {
+      case NodeType.FunctionExpression:
+      case NodeType.ArrowFunctionExpression:
+      case NodeType.FunctionDeclaration:
+      case NodeType.LazyFunctionDeclaration:
+      case NodeType.GeneratorFunctionDeclaration:
+        return true;
+    }
+    for (const key in node) {
+      if (key === "type") continue;
+      const value = node[key];
+      if (Array.isArray(value)) {
+        for (const el of value) {
+          if (this._bodyMayCapture(el)) return true;
+        }
+      } else if (value && typeof value === "object") {
+        if (this._bodyMayCapture(value)) return true;
+      }
+    }
+    return false;
+  },
+
   compileWhileStatement(node) {
+    const iterationScopeBase = this.func.registerCount;
+    const mayCapture = this._bodyMayCapture(node.body);
     const outerBreak = this._breakJumps;
     const outerContinue = this._continueJumps;
     const breakJumps = [];
@@ -128,11 +154,14 @@ export const statementMethods = {
     this.compileStatement(node.body);
 
     const continueTarget = this.func.instructions.length;
+    if (mayCapture) {
+      this.func.emit(bytecode.ROP_CLOSE_UPVALUES, iterationScopeBase);
+    }
     this.func.emit(bytecode.ROP_JUMP, loopStart);
     const endTarget = this.func.instructions.length;
     this.func.patchJump(jumpToEnd, endTarget);
     for (const j of breakJumps) this.func.patchJump(j, endTarget);
-    for (const j of continueJumps) this.func.patchJump(j, loopStart);
+    for (const j of continueJumps) this.func.patchJump(j, continueTarget);
 
     this._breakJumps = outerBreak;
     this._continueJumps = outerContinue;
@@ -141,6 +170,8 @@ export const statementMethods = {
   compileForStatement(node) {
     const outerScope = this.scope;
     this.scope = new Scope(outerScope);
+    const iterationScopeBase = this.func.registerCount;
+    const mayCapture = this._bodyMayCapture(node.body);
     const outerBreak = this._breakJumps;
     const outerContinue = this._continueJumps;
     const breakJumps = [];
@@ -175,6 +206,9 @@ export const statementMethods = {
     this.compileStatement(node.body);
 
     const updateStart = this.func.instructions.length;
+    if (mayCapture) {
+      this.func.emit(bytecode.ROP_CLOSE_UPVALUES, iterationScopeBase);
+    }
     if (node.update) {
       this.compileExpression(node.update);
     }

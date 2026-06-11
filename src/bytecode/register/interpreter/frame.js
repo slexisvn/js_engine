@@ -75,8 +75,8 @@ export class RegisterFrame {
   getOrCreateUpvalueCell(localSlot) {
     if (!this.openUpvalues) {
       this.openUpvalues = new Map();
-      this.hasUpvalues = true;
     }
+    this.hasUpvalues = true;
     if (this.openUpvalues.has(localSlot)) {
       return this.openUpvalues.get(localSlot);
     }
@@ -90,5 +90,16 @@ export class RegisterFrame {
     for (const cell of this.openUpvalues.values()) {
       cell.close();
     }
+  }
+
+  closeUpvaluesFrom(baseSlot) {
+    if (!this.openUpvalues) return;
+    for (const [slot, cell] of this.openUpvalues) {
+      if (slot >= baseSlot) {
+        cell.close();
+        this.openUpvalues.delete(slot);
+      }
+    }
+    if (this.openUpvalues.size === 0) this.hasUpvalues = false;
   }
 }

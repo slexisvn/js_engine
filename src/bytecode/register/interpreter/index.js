@@ -1156,6 +1156,11 @@ export class RegisterInterpreter {
               break;
             }
 
+            case bytecode.ROP_CLOSE_UPVALUES: {
+              if (frame.hasUpvalues) frame.closeUpvaluesFrom(operands[0]);
+              break;
+            }
+
             case bytecode.ROP_JUMP: {
               const target = operands[0];
               if (target < frame.pc) {

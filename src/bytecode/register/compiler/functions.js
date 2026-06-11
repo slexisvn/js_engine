@@ -429,51 +429,43 @@ export const functionMethods = {
   },
 
   compileForInStatement(node) {
-    const keysResolved = this.scope.resolve("_keys$");
-    const keysSlot = keysResolved
-      ? keysResolved.slot
-      : this._declareLocal("_keys$", "var");
-    const iResolved = this.scope.resolve("_i$");
-    const iSlot = iResolved ? iResolved.slot : this._declareLocal("_i$", "var");
-    const lenResolved = this.scope.resolve("_len$");
-    const lenSlot = lenResolved
-      ? lenResolved.slot
-      : this._declareLocal("_len$", "var");
-    const isScriptVar = this.scope.isInScriptScope() && node.kind === "var";
-    let varSlot = null;
-    let varGlobalNameIdx = null;
-    if (isScriptVar) {
-      varGlobalNameIdx = this.func.addConstant(node.variable);
-    } else {
-      const varResolved = this.scope.resolve(node.variable);
-      varSlot = varResolved
-        ? varResolved.slot
-        : this._declareLocal(
-            node.variable,
-            node.kind === "const" ? "const" : node.kind === "var" ? "var" : "let",
-          );
-      if (!varResolved) {
-        this.func.setLocalBindingKind(
-          varSlot,
-          node.kind === "const" ? "const" : node.kind === "var" ? "var" : "let",
-        );
-      }
-    }
-
     const objReg = this.temps.alloc();
     this.compileExpression(node.object);
     this.func.emit(bytecode.ROP_STAR, objReg);
+
+    const keysSlot = this.func.addLocal("_keys$");
     this.func.emit(bytecode.ROP_GET_KEYS, objReg);
     this.func.emit(bytecode.ROP_STAR, keysSlot);
 
+    const iSlot = this.func.addLocal("_i$");
     const zeroIdx = this.func.addConstant(0);
     this.func.emit(bytecode.ROP_LDA_CONST, zeroIdx);
     this.func.emit(bytecode.ROP_STAR, iSlot);
 
+    const lenSlot = this.func.addLocal("_len$");
     this.func.emit(bytecode.ROP_GET_LENGTH, keysSlot);
     this.func.emit(bytecode.ROP_STAR, lenSlot);
 
     this.temps.free(objReg);
+
+    const outerScope = this.scope;
+    this.scope = new Scope(outerScope);
+    const isScriptVar = outerScope.isInScriptScope() && node.kind === "var";
+    let varSlot = null;
+    let varGlobalNameIdx = null;
+    if (isScriptVar) {
+      varGlobalNameIdx = this.func.addConstant(node.variable);
+    } else if (node.kind === "var") {
+      const varResolved = outerScope.resolve(node.variable);
+      varSlot = varResolved
+        ? varResolved.slot
+        : this._declareLocal(node.variable, "var");
+      if (!varResolved) this.func.setLocalBindingKind(varSlot, "var");
+    } else {
+      const kind = node.kind === "const" ? "const" : "let";
+      varSlot = this._declareLocal(node.variable, kind);
+      this.func.setLocalBindingKind(varSlot, kind);
+    }
 
     const outerBreak = this._breakJumps;
     const outerContinue = this._continueJumps;
@@ -502,6 +494,9 @@ export const functionMethods = {
     }
 
     const continueTarget = this.func.instructions.length;
+    if (varSlot !== null && node.kind !== "var" && this._bodyMayCapture(node.body)) {
+      this.func.emit(bytecode.ROP_CLOSE_UPVALUES, varSlot);
+    }
     this.func.emit(bytecode.ROP_LDA_REG, iSlot);
     const oneIdx = this.func.addConstant(1);
     const oneReg = this.temps.alloc();
@@ -521,41 +516,33 @@ export const functionMethods = {
 
     this._breakJumps = outerBreak;
     this._continueJumps = outerContinue;
+    this.scope = outerScope;
   },
 
   compileForOfStatement(node) {
-    const iterResolved = this.scope.resolve("_iter$");
-    const iterSlot = iterResolved
-      ? iterResolved.slot
-      : this._declareLocal("_iter$", "var");
-    const iterResultResolved = this.scope.resolve("_iterResult$");
-    const iterResultSlot = iterResultResolved
-      ? iterResultResolved.slot
-      : this._declareLocal("_iterResult$", "var");
-    const isScriptVar = this.scope.isInScriptScope() && node.kind === "var";
+    this.compileExpression(node.iterable);
+    this.func.emit(bytecode.ROP_GET_ITERATOR);
+    const iterSlot = this.func.addLocal("_iter$");
+    this.func.emit(bytecode.ROP_STAR, iterSlot);
+    const iterResultSlot = this.func.addLocal("_iterResult$");
+    const outerScope = this.scope;
+    this.scope = new Scope(outerScope);
+    const isScriptVar = outerScope.isInScriptScope() && node.kind === "var";
     let varSlot = null;
     let varGlobalNameIdx = null;
     if (isScriptVar) {
       varGlobalNameIdx = this.func.addConstant(node.variable);
-    } else {
-      const varResolved = this.scope.resolve(node.variable);
+    } else if (node.kind === "var") {
+      const varResolved = outerScope.resolve(node.variable);
       varSlot = varResolved
         ? varResolved.slot
-        : this._declareLocal(
-            node.variable,
-            node.kind === "const" ? "const" : node.kind === "var" ? "var" : "let",
-          );
-      if (!varResolved) {
-        this.func.setLocalBindingKind(
-          varSlot,
-          node.kind === "const" ? "const" : node.kind === "var" ? "var" : "let",
-        );
-      }
+        : this._declareLocal(node.variable, "var");
+      if (!varResolved) this.func.setLocalBindingKind(varSlot, "var");
+    } else {
+      const kind = node.kind === "const" ? "const" : "let";
+      varSlot = this._declareLocal(node.variable, kind);
+      this.func.setLocalBindingKind(varSlot, kind);
     }
-
-    this.compileExpression(node.iterable);
-    this.func.emit(bytecode.ROP_GET_ITERATOR);
-    this.func.emit(bytecode.ROP_STAR, iterSlot);
 
     const outerBreak = this._breakJumps;
     const outerContinue = this._continueJumps;
@@ -588,14 +575,19 @@ export const functionMethods = {
       this.compileStatement(node.body);
     }
 
+    const continueTarget = this.func.instructions.length;
+    if (varSlot !== null && node.kind !== "var" && this._bodyMayCapture(node.body)) {
+      this.func.emit(bytecode.ROP_CLOSE_UPVALUES, varSlot);
+    }
     this.func.emit(bytecode.ROP_JUMP, loopStart);
     const endTarget = this.func.instructions.length;
     this.func.patchJump(exitJump, endTarget);
     for (const j of breakJumps) this.func.patchJump(j, endTarget);
-    for (const j of continueJumps) this.func.patchJump(j, loopStart);
+    for (const j of continueJumps) this.func.patchJump(j, continueTarget);
 
     this._breakJumps = outerBreak;
     this._continueJumps = outerContinue;
+    this.scope = outerScope;
   },
 
   compileObjectDestructuring(node) {

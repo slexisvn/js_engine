@@ -203,4 +203,53 @@ describe("E2E: variables and scoping", () => {
       expect(() => engine.run("k;")).not.toThrow();
     });
   });
+
+  describe("per-iteration let bindings in closures", () => {
+    it("for-let creates a fresh binding captured per iteration", () => {
+      const r = engine.runValue(`
+        let fns = [];
+        for (let i = 0; i < 3; i++) fns.push(function () { return i; });
+        fns[0]() + "," + fns[1]() + "," + fns[2]();
+      `);
+      expect(r.value).toBe("0,1,2");
+    });
+
+    it("a block-scoped let inside a while loop is captured per iteration", () => {
+      const r = engine.runValue(`
+        let fns = [];
+        let i = 0;
+        while (i < 3) { let j = i; fns.push(function () { return j; }); i++; }
+        fns[0]() + "," + fns[1]() + "," + fns[2]();
+      `);
+      expect(r.value).toBe("0,1,2");
+    });
+
+    it("for-of binds each iteration value to its own closure", () => {
+      const r = engine.runValue(`
+        let fns = [];
+        for (const v of [10, 20, 30]) fns.push(function () { return v; });
+        fns[0]() + "," + fns[1]() + "," + fns[2]();
+      `);
+      expect(r.value).toBe("10,20,30");
+    });
+
+    it("for-in binds each key to its own closure", () => {
+      const r = engine.runValue(`
+        let fns = [];
+        let o = { a: 1, b: 2 };
+        for (const k in o) fns.push(function () { return k; });
+        fns[0]() + "," + fns[1]();
+      `);
+      expect(r.value).toBe("a,b");
+    });
+
+    it("a var loop counter stays shared across closures", () => {
+      const r = engine.runValue(`
+        let fns = [];
+        for (var i = 0; i < 3; i++) fns.push(function () { return i; });
+        fns[0]() + "," + fns[1]() + "," + fns[2]();
+      `);
+      expect(r.value).toBe("3,3,3");
+    });
+  });
 });

@@ -153,4 +153,35 @@ describe("E2E: functions", () => {
       expect(r.value).toBe(42);
     });
   });
+
+  describe("argument register allocation", () => {
+    it("passes contiguous arguments when preceded by array literals", () => {
+      const r = engine.runValue(`
+        function pick(m) { return m[0]; }
+        function add(x, y) { return x + y; }
+        var a = [[1, 2], [3, 4]];
+        var b = [[5, 6], [7, 8]];
+        add(pick(a)[0], pick(b)[0]);
+      `);
+      expect(r.value).toBe(6);
+    });
+
+    it("computes 2x2 matrix multiplication with global array arguments", () => {
+      const r = engine.runValue(`
+        function matmul(a, b) {
+          var result = [[0, 0], [0, 0]];
+          for (var i = 0; i < 2; i++)
+            for (var j = 0; j < 2; j++)
+              for (var k = 0; k < 2; k++)
+                result[i][j] += a[i][k] * b[k][j];
+          return result;
+        }
+        var a = [[1, 2], [3, 4]];
+        var b = [[5, 6], [7, 8]];
+        var c = matmul(a, b);
+        c[0][0] * 1000 + c[0][1] * 100 + c[1][0] * 10 + c[1][1];
+      `);
+      expect(r.value).toBe(19000 + 2200 + 430 + 50);
+    });
+  });
 });
