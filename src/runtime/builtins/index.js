@@ -11,6 +11,7 @@ import {
   mkRegex,
   mkSymbol,
   toDisplayString,
+  toString,
   isNumber,
   isSmi,
   isDouble,
@@ -594,7 +595,7 @@ export const builtins = {
     name: "String",
     call(args) {
       if (args.length === 0) return mkString("");
-      return mkString(toDisplayString(args[0]));
+      return mkString(toString(args[0]));
     },
   },
 

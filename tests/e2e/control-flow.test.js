@@ -88,6 +88,49 @@ describe("E2E: control flow", () => {
       `);
       expect(r.value).toBe(25);
     });
+
+    it("nested let loops re-run the inner loop fully on every outer pass", () => {
+      const r = engine.runValue(`
+        let s = "";
+        for (let i = 0; i < 2; i++) {
+          for (let j = 0; j < 2; j++) s = s + "x";
+        }
+        s;
+      `);
+      expect(r.value).toBe("xxxx");
+    });
+
+    it("nested let loops that shadow the same variable name stay independent", () => {
+      const r = engine.runValue(`
+        let count = 0;
+        for (let i = 0; i < 2; i++) {
+          for (let i = 0; i < 3; i++) count = count + 1;
+        }
+        count;
+      `);
+      expect(r.value).toBe(6);
+    });
+
+    it("triple-nested let loops iterate the full product", () => {
+      const r = engine.runValue(`
+        let count = 0;
+        for (let a = 0; a < 2; a++)
+          for (let b = 0; b < 2; b++)
+            for (let c = 0; c < 2; c++) count = count + 1;
+        count;
+      `);
+      expect(r.value).toBe(8);
+    });
+
+    it("a let loop variable shadows an outer binding of the same name", () => {
+      const r = engine.runValue(`
+        let i = 99;
+        let s = "";
+        for (let i = 0; i < 2; i++) s = s + i;
+        s + "|" + i;
+      `);
+      expect(r.value).toBe("01|99");
+    });
   });
 
   describe("while loop", () => {

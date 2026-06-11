@@ -28,6 +28,9 @@ import {
   isSymbol,
   toNumber,
   toBool,
+  toString,
+  toPrimitive,
+  abstractRelational,
   toDisplayString,
   typeOf,
   getPayload,
@@ -910,12 +913,14 @@ export class RegisterInterpreter {
                     : mkDouble(result);
               } else if (areBothNumber(left, right)) {
                 frame.acc = mkDouble(toNumber(left) + toNumber(right));
-              } else if (isString(left) || isString(right)) {
-                frame.acc = mkString(
-                  toDisplayString(left) + toDisplayString(right),
-                );
               } else {
-                frame.acc = mkDouble(toNumber(left) + toNumber(right));
+                const lp = toPrimitive(left);
+                const rp = toPrimitive(right);
+                if (isString(lp) || isString(rp)) {
+                  frame.acc = mkString(toString(lp) + toString(rp));
+                } else {
+                  frame.acc = mkDouble(toNumber(lp) + toNumber(rp));
+                }
               }
               break;
             }
@@ -1074,7 +1079,7 @@ export class RegisterInterpreter {
                 frame.acc = mkBool(toNumber(left) < toNumber(right));
               else if (isString(left) && isString(right))
                 frame.acc = mkBool(getPayload(left) < getPayload(right));
-              else frame.acc = mkBool(toNumber(left) < toNumber(right));
+              else frame.acc = mkBool(abstractRelational(left, right) < 0);
               break;
             }
 
@@ -1090,7 +1095,7 @@ export class RegisterInterpreter {
                 frame.acc = mkBool(toNumber(left) > toNumber(right));
               else if (isString(left) && isString(right))
                 frame.acc = mkBool(getPayload(left) > getPayload(right));
-              else frame.acc = mkBool(toNumber(left) > toNumber(right));
+              else frame.acc = mkBool(abstractRelational(left, right) > 0);
               break;
             }
 
@@ -1106,7 +1111,7 @@ export class RegisterInterpreter {
                 frame.acc = mkBool(toNumber(left) <= toNumber(right));
               else if (isString(left) && isString(right))
                 frame.acc = mkBool(getPayload(left) <= getPayload(right));
-              else frame.acc = mkBool(toNumber(left) <= toNumber(right));
+              else frame.acc = mkBool(abstractRelational(left, right) <= 0);
               break;
             }
 
@@ -1122,7 +1127,7 @@ export class RegisterInterpreter {
                 frame.acc = mkBool(toNumber(left) >= toNumber(right));
               else if (isString(left) && isString(right))
                 frame.acc = mkBool(getPayload(left) >= getPayload(right));
-              else frame.acc = mkBool(toNumber(left) >= toNumber(right));
+              else frame.acc = mkBool(abstractRelational(left, right) >= 0);
               break;
             }
 

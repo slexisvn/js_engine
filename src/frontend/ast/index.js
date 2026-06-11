@@ -50,6 +50,7 @@ export const NodeType = {
   SpreadElement: "SpreadElement",
   LabeledStatement: "LabeledStatement",
   SuperCallExpression: "SuperCallExpression",
+  SequenceExpression: "SequenceExpression",
 };
 
 export function Program(body) {
@@ -189,6 +190,10 @@ export function ConditionalExpression(test, consequent, alternate) {
 
 export function AwaitExpression(argument) {
   return { type: NodeType.AwaitExpression, argument };
+}
+
+export function SequenceExpression(expressions) {
+  return { type: NodeType.SequenceExpression, expressions };
 }
 
 export function SwitchStatement(discriminant, cases) {

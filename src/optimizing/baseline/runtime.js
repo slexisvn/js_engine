@@ -25,6 +25,9 @@ import {
   isBool,
   toNumber,
   toBool,
+  toString,
+  toPrimitive,
+  abstractRelational,
   toDisplayString,
   typeOf,
   getPayload,
@@ -379,9 +382,11 @@ export class BaselineRuntime {
       return res === (res | 0) ? mkSmi(res) : mkDouble(res);
     }
     if (isNumber(l) && isNumber(r)) return mkDouble(toNumber(l) + toNumber(r));
-    if (isString(l) || isString(r))
-      return mkString(toDisplayString(l) + toDisplayString(r));
-    return mkDouble(toNumber(l) + toNumber(r));
+    const lp = toPrimitive(l);
+    const rp = toPrimitive(r);
+    if (isString(lp) || isString(rp))
+      return mkString(toString(lp) + toString(rp));
+    return mkDouble(toNumber(lp) + toNumber(rp));
   }
 
   sub(l, r, fbSlot) {
@@ -479,20 +484,19 @@ export class BaselineRuntime {
           break;
       }
     } else {
-      const ln = toNumber(l),
-        rn = toNumber(r);
+      const c = abstractRelational(l, r);
       switch (op) {
         case 0:
-          result = ln < rn;
+          result = c < 0;
           break;
         case 1:
-          result = ln > rn;
+          result = c > 0;
           break;
         case 2:
-          result = ln <= rn;
+          result = c <= 0;
           break;
         case 3:
-          result = ln >= rn;
+          result = c >= 0;
           break;
       }
     }

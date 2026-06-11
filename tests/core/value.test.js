@@ -41,6 +41,7 @@ import {
   typeOf,
   strictEqual,
   abstractLooseEqual,
+  abstractRelational,
   toPrimitive,
   getHeapId,
   JSSymbol,
@@ -233,6 +234,22 @@ describe("toNumber", () => {
   it("undefined => NaN", () => {
     expect(toNumber(mkUndefined())).toBeNaN();
   });
+
+  it("empty array => 0", () => {
+    expect(toNumber(mkArray({ elements: [] }))).toBe(0);
+  });
+
+  it("single-element numeric array => that number", () => {
+    expect(toNumber(mkArray({ elements: [mkSmi(7)] }))).toBe(7);
+  });
+
+  it("multi-element array => NaN", () => {
+    expect(toNumber(mkArray({ elements: [mkSmi(1), mkSmi(2)] }))).toBeNaN();
+  });
+
+  it("plain object => NaN", () => {
+    expect(toNumber(mkObject({}))).toBeNaN();
+  });
 });
 
 describe("toBool", () => {
@@ -304,6 +321,30 @@ describe("toString", () => {
   it("symbol shows description", () => {
     expect(toString(mkSymbol(new JSSymbol("test")))).toBe("Symbol(test)");
     expect(toString(mkSymbol(new JSSymbol(undefined)))).toBe("Symbol()");
+  });
+
+  it("array joins elements with commas", () => {
+    const arr = mkArray({ elements: [mkSmi(0), mkSmi(5), mkSmi(9)] });
+    expect(toString(arr)).toBe("0,5,9");
+  });
+
+  it("empty array stringifies to empty string", () => {
+    expect(toString(mkArray({ elements: [] }))).toBe("");
+  });
+
+  it("array renders null and undefined elements as empty", () => {
+    const arr = mkArray({ elements: [mkSmi(1), mkNull(), mkUndefined()] });
+    expect(toString(arr)).toBe("1,,");
+  });
+
+  it("nested arrays stringify recursively", () => {
+    const inner = mkArray({ elements: [mkSmi(2), mkSmi(3)] });
+    const arr = mkArray({ elements: [mkSmi(1), inner] });
+    expect(toString(arr)).toBe("1,2,3");
+  });
+
+  it("plain object stringifies to [object Object]", () => {
+    expect(toString(mkObject({}))).toBe("[object Object]");
   });
 });
 
@@ -382,6 +423,35 @@ describe("abstractLooseEqual", () => {
 
   it("different types that don't coerce are not equal", () => {
     expect(abstractLooseEqual(mkString("abc"), mkSmi(0))).toBe(false);
+  });
+});
+
+describe("abstractRelational", () => {
+  it("orders numbers", () => {
+    expect(abstractRelational(mkSmi(1), mkSmi(2))).toBe(-1);
+    expect(abstractRelational(mkSmi(2), mkSmi(2))).toBe(0);
+    expect(abstractRelational(mkSmi(3), mkSmi(2))).toBe(1);
+  });
+
+  it("compares strings lexicographically", () => {
+    expect(abstractRelational(mkString("a"), mkString("b"))).toBe(-1);
+    expect(abstractRelational(mkString("a"), mkString("a"))).toBe(0);
+    expect(abstractRelational(mkString("10"), mkString("9"))).toBe(-1);
+  });
+
+  it("coerces a numeric string against a number", () => {
+    expect(abstractRelational(mkString("5"), mkSmi(5))).toBe(0);
+  });
+
+  it("compares arrays via their primitive string form", () => {
+    const left = mkArray({ elements: [mkSmi(1), mkSmi(2)] });
+    const right = mkArray({ elements: [mkSmi(1), mkSmi(2)] });
+    expect(abstractRelational(left, right)).toBe(0);
+  });
+
+  it("returns NaN when a side is not a number", () => {
+    expect(abstractRelational(mkString("a"), mkSmi(1))).toBeNaN();
+    expect(abstractRelational(mkUndefined(), mkSmi(1))).toBeNaN();
   });
 });
 

@@ -50,6 +50,26 @@ describe("E2E: error handling", () => {
     expect(r.value).toBe("catch finally");
   });
 
+  it("a let loop inside finally runs all its iterations", () => {
+    const r = engine.runValue(`
+      let s = "";
+      try { s = s + "t"; }
+      finally { for (let k = 0; k < 3; k++) s = s + "y"; }
+      s;
+    `);
+    expect(r.value).toBe("tyyy");
+  });
+
+  it("a let loop inside catch runs all its iterations", () => {
+    const r = engine.runValue(`
+      let s = "";
+      try { throw 1; }
+      catch (e) { for (let k = 0; k < 3; k++) s = s + "y"; }
+      s;
+    `);
+    expect(r.value).toBe("yyy");
+  });
+
   it("nested try-catch: inner catches, outer does not", () => {
     const r = engine.runValue(`
       var result = "";

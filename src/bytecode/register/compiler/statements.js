@@ -69,13 +69,18 @@ export const statementMethods = {
       return;
     }
 
-    const resolved = this.scope.resolve(node.name);
     const kind =
       node.type === NodeType.ConstDeclaration
         ? "const"
         : node.type === NodeType.VarDeclaration
           ? "var"
           : "let";
+    const resolved =
+      kind === "var"
+        ? this.scope.resolve(node.name)
+        : this.scope.locals.has(node.name)
+          ? this.scope.resolve(node.name)
+          : null;
     const slot = resolved ? resolved.slot : this._declareLocal(node.name, kind);
     if (!resolved) {
       this.func.setLocalBindingKind(slot, kind);

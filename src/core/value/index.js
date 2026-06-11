@@ -369,19 +369,20 @@ export function toString(v) {
       if (obj && obj._mapData) return `Map(${obj._mapData.size})`;
       if (obj && obj._setData) return `Set(${obj._setData.size})`;
       if (obj && obj._weakMapData) return `WeakMap`;
-      return obj && typeof obj.toString === "function"
-        ? obj.toString()
-        : "[object Object]";
+      return "[object Object]";
     }
     case CODE_ARRAY: {
       const arr = getPayload(v);
       if (arr && arr.elements) {
-        const items = arr.elements
-          .map((el) => (el !== undefined ? toDisplayString(el) : "undefined"))
-          .join(", ");
-        return `[${items}]`;
+        return arr.elements
+          .map((el) => {
+            if (el === undefined) return "";
+            const c = codeOf(el);
+            return c === CODE_NULL || c === CODE_UNDEFINED ? "" : toString(el);
+          })
+          .join(",");
       }
-      return "[]";
+      return "";
     }
     case CODE_PROMISE:
       return `[Promise ${getPayload(v).state}]`;
@@ -425,6 +426,13 @@ export function toDisplayString(v) {
   }
   if (code === CODE_STRING) {
     return getPayload(v);
+  }
+  if (code === CODE_OBJECT) {
+    const obj = getPayload(v);
+    if (obj && obj._mapData) return `Map(${obj._mapData.size})`;
+    if (obj && obj._setData) return `Set(${obj._setData.size})`;
+    if (obj && obj._weakMapData) return `WeakMap`;
+    if (obj && typeof obj.toString === "function") return obj.toString();
   }
   return toString(v);
 }
@@ -518,6 +526,20 @@ export function abstractLooseEqual(x, y) {
   }
 
   return false;
+}
+
+export function abstractRelational(left, right) {
+  const lp = toPrimitive(left, "number");
+  const rp = toPrimitive(right, "number");
+  if (codeOf(lp) === CODE_STRING && codeOf(rp) === CODE_STRING) {
+    const a = getPayload(lp);
+    const b = getPayload(rp);
+    return a < b ? -1 : a > b ? 1 : 0;
+  }
+  const a = toNumber(lp);
+  const b = toNumber(rp);
+  if (Number.isNaN(a) || Number.isNaN(b)) return NaN;
+  return a < b ? -1 : a > b ? 1 : 0;
 }
 
 export function strictEqual(a, b) {

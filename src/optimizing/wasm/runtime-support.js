@@ -26,6 +26,7 @@ import {
   toDisplayString,
   typeOf,
   abstractLooseEqual,
+  abstractRelational,
   TAG_SMI,
   TAG_DOUBLE,
   getPayload,
@@ -151,18 +152,11 @@ export function compareValues(op, left, right) {
     return strictEqual(left, right);
   }
   if (op === "!=") return !compareValues("==", left, right);
-  if (isString(left) && isString(right)) {
-    if (op === "<") return getPayload(left) < getPayload(right);
-    if (op === ">") return getPayload(left) > getPayload(right);
-    if (op === "<=") return getPayload(left) <= getPayload(right);
-    if (op === ">=") return getPayload(left) >= getPayload(right);
-  }
-  const l = taggedToNumber(left);
-  const r = taggedToNumber(right);
-  if (op === "<") return l < r;
-  if (op === ">") return l > r;
-  if (op === "<=") return l <= r;
-  if (op === ">=") return l >= r;
+  const c = abstractRelational(left, right);
+  if (op === "<") return c < 0;
+  if (op === ">") return c > 0;
+  if (op === "<=") return c <= 0;
+  if (op === ">=") return c >= 0;
   return false;
 }
 

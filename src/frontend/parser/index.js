@@ -53,6 +53,7 @@ import {
   SpreadElement,
   LabeledStatement,
   SuperCallExpression,
+  SequenceExpression,
 } from "../ast/index.js";
 
 import { Lexer, TokenType } from "../lexer/index.js";
@@ -855,6 +856,15 @@ export class Parser {
       }
       this.advance();
       const expr = this.parseExpression();
+      if (this.check(TokenType.Punctuator, ",")) {
+        const expressions = [expr];
+        while (this.check(TokenType.Punctuator, ",")) {
+          this.advance();
+          expressions.push(this.parseExpression());
+        }
+        this.expect(TokenType.Punctuator, ")");
+        return SequenceExpression(expressions);
+      }
       this.expect(TokenType.Punctuator, ")");
       return expr;
     }
@@ -877,6 +887,12 @@ export class Parser {
       this.advance();
       const argument = this.parseExpression(11);
       return UnaryExpression("-", argument);
+    }
+
+    if (this.check(TokenType.Punctuator, "+")) {
+      this.advance();
+      const argument = this.parseExpression(11);
+      return UnaryExpression("+", argument);
     }
 
     if (this.check(TokenType.Punctuator, "~")) {

@@ -77,8 +77,16 @@ export const expressionMethods = {
         return this.compileOptionalCall(node);
       case NodeType.SuperCallExpression:
         return this.compileSuperCall(node);
+      case NodeType.SequenceExpression:
+        return this.compileSequenceExpression(node);
       default:
         throw new Error(`[RegCompiler] Unknown expression type '${node.type}'`);
+    }
+  },
+
+  compileSequenceExpression(node) {
+    for (let i = 0; i < node.expressions.length; i++) {
+      this.compileExpression(node.expressions[i]);
     }
   },
 
@@ -163,6 +171,11 @@ export const expressionMethods = {
       case "-": {
         const fbSlot = this.func.allocFeedbackSlot();
         this.func.emit(bytecode.ROP_NEG, fbSlot);
+        break;
+      }
+      case "+": {
+        this.func.emit(bytecode.ROP_NEG, this.func.allocFeedbackSlot());
+        this.func.emit(bytecode.ROP_NEG, this.func.allocFeedbackSlot());
         break;
       }
       case "typeof":

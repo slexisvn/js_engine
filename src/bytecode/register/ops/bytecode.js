@@ -257,11 +257,11 @@ export class RegisterCompiledFunction {
   }
 
   addLocal(name) {
-    this.localNames.push(name);
-    this.localBindingKinds.push("temp");
-    const slot = this.localCount++;
-    if (this.registerCount <= slot) {
-      this.registerCount = slot + 1;
+    const slot = this.registerCount++;
+    this.localNames[slot] = name;
+    this.localBindingKinds[slot] = "temp";
+    if (this.localCount <= slot) {
+      this.localCount = slot + 1;
     }
     return slot;
   }

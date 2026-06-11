@@ -96,7 +96,7 @@ describe("Parser", () => {
   describe("unary expressions", () => {
     it("all unary operators", () => {
       const cases = [
-        ["-x", "-"], ["!x", "!"], ["~x", "~"],
+        ["-x", "-"], ["+x", "+"], ["!x", "!"], ["~x", "~"],
         ["typeof x", "typeof"], ["void 0", "void"], ["delete obj.x", "delete"],
       ];
       for (const [src, op] of cases) {
@@ -104,6 +104,26 @@ describe("Parser", () => {
         expect(expr.type).toBe(NodeType.UnaryExpression);
         expect(expr.op).toBe(op);
       }
+    });
+  });
+
+  describe("sequence expressions", () => {
+    it("parses a parenthesized comma sequence", () => {
+      const expr = parseExpr("(a, b, c)");
+      expect(expr.type).toBe(NodeType.SequenceExpression);
+      expect(expr.expressions).toHaveLength(3);
+    });
+
+    it("does not treat call arguments as a sequence", () => {
+      const expr = parseExpr("f(a, b)");
+      expect(expr.type).toBe(NodeType.CallExpression);
+      expect(expr.args).toHaveLength(2);
+    });
+
+    it("does not treat array elements as a sequence", () => {
+      const expr = parseExpr("[a, b]");
+      expect(expr.type).toBe(NodeType.ArrayExpression);
+      expect(expr.elements).toHaveLength(2);
     });
   });
 

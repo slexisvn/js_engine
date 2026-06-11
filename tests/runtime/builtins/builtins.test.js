@@ -301,4 +301,30 @@ describe("builtins", () => {
       }
     });
   });
+
+  describe("String", () => {
+    it("empty args yields empty string", () => {
+      expect(getPayload(builtins.String.call([]))).toBe("");
+    });
+
+    it("uses spec ToString for numbers and booleans", () => {
+      expect(getPayload(builtins.String.call([mkSmi(42)]))).toBe("42");
+      expect(getPayload(builtins.String.call([mkBool(true)]))).toBe("true");
+    });
+
+    it("joins array elements with commas, not the debug form", () => {
+      const arr = mkArray(createJSArray([mkSmi(0), mkSmi(5), mkSmi(9)]));
+      expect(getPayload(builtins.String.call([arr]))).toBe("0,5,9");
+    });
+
+    it("renders empty array as empty string", () => {
+      const arr = mkArray(createJSArray([]));
+      expect(getPayload(builtins.String.call([arr]))).toBe("");
+    });
+
+    it("renders a plain object as [object Object]", () => {
+      const obj = mkObject(createJSObject());
+      expect(getPayload(builtins.String.call([obj]))).toBe("[object Object]");
+    });
+  });
 });

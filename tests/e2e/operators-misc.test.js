@@ -290,3 +290,163 @@ describe("E2E: toString and valueOf", () => {
     expect(r.value).toBe("value:42");
   });
 });
+
+describe("E2E: unary plus", () => {
+  let engine;
+
+  beforeEach(() => {
+    engine = new MiniJIT();
+  });
+
+  it("converts a numeric string to a number", () => {
+    const r = engine.runValue('+"5";');
+    expect(r.tag).toBe("smi");
+    expect(r.value).toBe(5);
+  });
+
+  it("converts a boolean to a number", () => {
+    const r = engine.runValue("+true;");
+    expect(r.value).toBe(1);
+  });
+
+  it("leaves a number unchanged", () => {
+    const r = engine.runValue("+8.5;");
+    expect(r.value).toBe(8.5);
+  });
+
+  it("composes with other unary operators", () => {
+    const r = engine.runValue("+-3;");
+    expect(r.value).toBe(-3);
+  });
+
+  it("converts an empty array to zero", () => {
+    const r = engine.runValue("+[];");
+    expect(r.value).toBe(0);
+  });
+
+  it("produces NaN for a non-numeric string", () => {
+    const r = engine.runValue('+"abc";');
+    expect(r.tag).toBe("double");
+    expect(Number.isNaN(r.value)).toBe(true);
+  });
+
+  it("survives optimization in a hot loop", () => {
+    engine.run(`
+      function unaryPlus(s) {
+        let acc = 0;
+        for (let i = 0; i < 5; i++) { acc = acc + +s; }
+        return acc;
+      }
+    `);
+    for (let i = 0; i < 200; i++) engine.run('unaryPlus("4");');
+    expect(engine.runValue('unaryPlus("4");').value).toBe(20);
+  });
+});
+
+describe("E2E: additive operator coercion", () => {
+  let engine;
+
+  beforeEach(() => {
+    engine = new MiniJIT();
+  });
+
+  it("concatenates a string with an array via ToPrimitive", () => {
+    const r = engine.runValue('"x" + [1, 2];');
+    expect(r.value).toBe("x1,2");
+  });
+
+  it("concatenates an array with a string", () => {
+    const r = engine.runValue('[1, 2, 3] + "";');
+    expect(r.value).toBe("1,2,3");
+  });
+
+  it("concatenates a boolean with an array", () => {
+    const r = engine.runValue("false + [1, 2];");
+    expect(r.value).toBe("false1,2");
+  });
+
+  it("concatenates a number with a plain object", () => {
+    const r = engine.runValue("1 + {};");
+    expect(r.value).toBe("1[object Object]");
+  });
+
+  it("adds numbers obtained from single-element arrays", () => {
+    const r = engine.runValue("[5] * 1;");
+    expect(r.value).toBe(5);
+  });
+
+  it("treats an empty array as zero in arithmetic", () => {
+    const r = engine.runValue("[] % 6;");
+    expect(r.value).toBe(0);
+  });
+});
+
+describe("E2E: relational comparison coercion", () => {
+  let engine;
+
+  beforeEach(() => {
+    engine = new MiniJIT();
+  });
+
+  it("compares equal arrays via their string form", () => {
+    expect(engine.runValue("[1, 2, 3] <= [1, 2, 3];").value).toBe(true);
+    expect(engine.runValue("[1, 2, 3] >= [1, 2, 3];").value).toBe(true);
+    expect(engine.runValue("[1, 2, 3] < [1, 2, 3];").value).toBe(false);
+  });
+
+  it("compares an array against a string", () => {
+    expect(engine.runValue('[1, 2] < "1,3";').value).toBe(true);
+  });
+
+  it("keeps numeric comparison when an operand coerces to a number", () => {
+    expect(engine.runValue("[] < 1.9;").value).toBe(true);
+    expect(engine.runValue('"5" <= 5;').value).toBe(true);
+  });
+
+  it("yields false when an operand is not comparable", () => {
+    expect(engine.runValue('"a" < 1;').value).toBe(false);
+  });
+
+  it("stays correct after optimization in a hot loop", () => {
+    engine.run(`
+      function cmp(x) {
+        let hits = 0;
+        for (let i = 0; i < 5; i++) { if (x <= [1, 2, 3]) hits = hits + 1; }
+        return hits;
+      }
+    `);
+    for (let i = 0; i < 200; i++) engine.run("cmp([1, 2, 3]);");
+    expect(engine.runValue("cmp([1, 2, 3]);").value).toBe(5);
+  });
+});
+
+describe("E2E: sequence (comma) operator", () => {
+  let engine;
+
+  beforeEach(() => {
+    engine = new MiniJIT();
+  });
+
+  it("evaluates to the last expression", () => {
+    expect(engine.runValue("(1, 2, 3);").value).toBe(3);
+  });
+
+  it("evaluates each operand for side effects", () => {
+    const r = engine.runValue("let a = 0; (a = 5, a + 1);");
+    expect(r.value).toBe(6);
+  });
+
+  it("works as an initializer", () => {
+    expect(engine.runValue("let x = (10, 20); x;").value).toBe(20);
+  });
+
+  it("does not swallow commas in call arguments", () => {
+    const r = engine.runValue("function f(x) { return x; } f((1, 2));");
+    expect(r.value).toBe(2);
+  });
+
+  it("does not swallow commas in array literals", () => {
+    const r = engine.runValue("[(1, 2), (3, 4)].length;");
+    expect(r.value).toBe(2);
+  });
+});
